@@ -73,27 +73,80 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
     };
 
     const handleFrameFileChange = (file: File, selectedLayoutIds: string[]) => {
-        Update
-                                        </button >
-{
-    layout.type === 'custom' && (
-        <button
-            onClick={() => handleRemoveLayout(layout.id)}
-            className="text-red-400 hover:text-red-300"
-            title="Delete Layout"
-        >
-            Delete
-        </button>
-    )
-}
-                                    </div >
-                                </td >
-                            </tr >
+        const url = URL.createObjectURL(file);
+        const newFrameConfig: import('../types').FrameConfig = {
+            id: Date.now().toString(),
+            name: file.name.replace('.png', ''),
+            thumbnailSrc: url,
+            isVisible: true,
+            supportedLayouts: (localSettings.layoutOptions || [])
+                .filter(l => selectedLayoutIds.includes(l.id))
+                .map(l => ({
+                    layoutId: l.id,
+                    placeholders: l.placeholders,
+                    overlaySrc: url
+                }))
+        };
+        setLocalSettings(prev => ({
+            ...prev,
+            frameSrc: url,
+            availableFrames: [...prev.availableFrames, newFrameConfig]
+        }));
+    };
+
+    const handleRemoveLayout = (id: string) => {
+        setLocalSettings(prev => ({
+            ...prev,
+            layoutOptions: prev.layoutOptions.filter(l => l.id !== id)
+        }));
+    };
+
+    const renderLayoutSettings = () => (
+        <div className="space-y-4">
+            <div className="flex justify-between items-center">
+                <h3 className="text-lg font-medium text-white">Layout Presets</h3>
+            </div>
+            <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm text-gray-400">
+                    <thead className="bg-gray-800 text-gray-200 uppercase font-medium">
+                        <tr>
+                            <th className="px-4 py-3">Name</th>
+                            <th className="px-4 py-3">Type</th>
+                            <th className="px-4 py-3">Slots</th>
+                            <th className="px-4 py-3 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-700">
+                        {localSettings.layoutOptions.map(layout => (
+                            <tr key={layout.id} className="hover:bg-gray-800/50">
+                                <td className="px-4 py-3 font-medium text-white">{layout.label}</td>
+                                <td className="px-4 py-3">{layout.type}</td>
+                                <td className="px-4 py-3">{layout.placeholders.length}</td>
+                                <td className="px-4 py-3 text-right">
+                                    <div className="flex justify-end gap-3">
+                                        <button
+                                            onClick={() => handleEditGlobalLayout(layout.id)}
+                                            className="text-indigo-400 hover:text-indigo-300"
+                                        >
+                                            Edit
+                                        </button>
+                                        {layout.type === 'custom' && (
+                                            <button
+                                                onClick={() => handleRemoveLayout(layout.id)}
+                                                className="text-red-400 hover:text-red-300"
+                                                title="Delete Layout"
+                                            >
+                                                Delete
+                                            </button>
+                                        )}
+                                    </div>
+                                </td>
+                            </tr>
                         ))}
-                    </tbody >
-                </table >
-            </div >
-        </div >
+                    </tbody>
+                </table>
+            </div>
+        </div>
     );
 
 const renderProSettings = () => (
@@ -212,6 +265,82 @@ const handleLayoutSelectForEditing = (layoutId: string) => {
         }
     }
 };
+
+const handleEditGlobalLayout = (layoutId: string) => {
+    setEditingLayoutId(layoutId);
+    setIsEditingLayout(true);
+};
+
+const handleSaveLayoutPlaceholders = (placeholders: Placeholder[]) => {
+    if (!editingLayoutId) return;
+
+    const updatedLayouts = localSettings.layoutOptions.map(l =>
+        l.id === editingLayoutId ? { ...l, placeholders } : l
+    );
+    handleSettingChange('layoutOptions', updatedLayouts);
+};
+
+    const handleSetDefaultFrame = (frame: import('../types').FrameConfig) => {
+        handleSettingChange('frameSrc', frame.thumbnailSrc);
+    };
+
+    const handleRemoveFrame = (index: number) => {
+        const newFrames = [...localSettings.availableFrames];
+        newFrames.splice(index, 1);
+        handleSettingChange('availableFrames', newFrames);
+        if (localSettings.availableFrames[index] && localSettings.frameSrc === localSettings.availableFrames[index].thumbnailSrc) {
+            handleSettingChange('frameSrc', null);
+        }
+    };    const addPrinter = () => {
+        if (!newPrinterName.trim()) return;
+        const newPrinter: Printer = {
+            id: Date.now().toString(),
+            name: newPrinterName,
+            status: 'idle',
+            jobs: 0
+        };
+        handleProSettingChange('printerPool', [...localSettings.pro.printerPool, newPrinter]);
+        setNewPrinterName('');
+    };
+
+    const removePrinter = (id: string) => {
+        handleProSettingChange('printerPool', localSettings.pro.printerPool.filter(p => p.id !== id));
+    };
+
+    const handleIccFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            handleProSettingChange('iccProfileName', file.name);
+        }
+    };
+
+    const renderGeneralSettings = () => (
+        <div className="space-y-6">
+             <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
+                <h3 className="text-lg font-medium text-white mb-4">Directories</h3>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-400 mb-1">Hot Folder (Input)</label>
+                        <div className="flex gap-2">
+                            <input type="text" readOnly value={localSettings.hotFolderName || ''} className="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-gray-300 text-sm" placeholder="No folder selected" />
+                            <button onClick={handleSelectHotFolder} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-white flex items-center gap-2">
+                                <FolderIcon className="w-4 h-4" /> Browse
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-400 mb-1">Output Folder (Save)</label>
+                        <div className="flex gap-2">
+                            <input type="text" readOnly value={localSettings.localDownloadPath || ''} className="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-gray-300 text-sm" placeholder="Default (Downloads)" />
+                            <button onClick={handleSelectOutputFolder} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-white flex items-center gap-2">
+                                <FolderIcon className="w-4 h-4" /> Browse
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 
 return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" aria-modal="true">
