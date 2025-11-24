@@ -8,6 +8,9 @@ import CanvasEditor from './components/CanvasEditor';
 import StepIndicator from './components/StepIndicator';
 import SettingsPanel from './components/SettingsPanel';
 import UiCustomizationPanel from './components/UiCustomizationPanel';
+import GuestLayoutStatus from './components/GuestLayoutStatus';
+import PrinterQueuePanel, { PrintJob } from './components/PrinterQueuePanel';
+import GuestLivePreview from './components/GuestLivePreview';
 import { GoogleGenAI, Modality } from '@google/genai';
 
 import { SettingsIcon, PaletteIcon } from './components/icons';
@@ -247,6 +250,43 @@ const App: React.FC = () => {
         };
     }, [settings.placeholders, session, settings.layoutOptions]); // Dependency on settings/session for callbacks
 
+    const [guestLayoutId, setGuestLayoutId] = useState<string | null>(null);
+    const lastGuestBroadcastRef = useRef<number>(0);
+    const BROADCAST_INTERVAL_MS = 300; // throttle interval
+    // Printer queue job tracking
+    const [printJobs, setPrintJobs] = useState<PrintJob[]>([]);
+    const [showPrinterPanel, setShowPrinterPanel] = useState(false);
+    // Kiosk lock tracking
+    const [isKioskLocked, setIsKioskLocked] = useState(false);
+    const lastActivityRef = useRef<number>(Date.now());
+    const [unlockAttemptPin, setUnlockAttemptPin] = useState('');
+    const handleActivity = () => { lastActivityRef.current = Date.now(); if (isKioskLocked) return; };
+    useEffect(() => {
+        const events = ['pointermove', 'keydown', 'click'];
+        events.forEach(ev => window.addEventListener(ev, handleActivity));
+        return () => { events.forEach(ev => window.removeEventListener(ev, handleActivity)); };
+    }, [isKioskLocked]);
+    useEffect(() => {
+        if (!settings.kioskMode || !settings.autoResetTimer) return;
+        const interval = setInterval(() => {
+            if (isSettingsOpen) return; // don't lock while actively editing settings
+            const idleMs = Date.now() - lastActivityRef.current;
+            if (!isKioskLocked && idleMs > settings.autoResetTimer * 1000) {
+                setIsKioskLocked(true);
+            }
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [settings.kioskMode, settings.autoResetTimer, isSettingsOpen, isKioskLocked]);
+    const attemptUnlock = () => {
+        if (unlockAttemptPin === (settings.kioskPin || '')) {
+            setIsKioskLocked(false);
+            setUnlockAttemptPin('');
+            lastActivityRef.current = Date.now();
+        } else {
+            alert('Incorrect PIN');
+        }
+    };
+
     const handleGuestActionDispatch = (action: GuestAction) => {
         switch (action.type) {
             case 'GUEST_START':
@@ -256,6 +296,7 @@ const App: React.FC = () => {
                 sendMessage({ mode: GuestScreenMode.CONFIG_SELECTION, layoutOptions: settings.layoutOptions });
                 break;
             case 'GUEST_SELECT_LAYOUT':
+                setGuestLayoutId(action.layout);
                 if (action.layout !== 'custom') {
                     applyPresetLayout(action.layout);
                 }
@@ -346,6 +387,24 @@ const App: React.FC = () => {
             setSettings(prev => ({ ...prev, placeholders: layout.placeholders }));
         }
     };
+
+    // Broadcast placeholder changes to guest window when organizer edits active guest layout
+    // Throttled broadcast of organizer edits to active guest layout
+    useEffect(() => {
+        if (!guestWindow || !guestLayoutId) return;
+        const now = Date.now();
+        if (now - lastGuestBroadcastRef.current < BROADCAST_INTERVAL_MS) return;
+        lastGuestBroadcastRef.current = now;
+        const activeLayout = settings.layoutOptions.find(l => l.id === guestLayoutId);
+        if (!activeLayout) return;
+        sendMessage({
+            mode: GuestScreenMode.LIVE_PREVIEW,
+            frameSrc: settings.frameSrc,
+            placeholders: settings.placeholders,
+            aspectRatio: settings.aspectRatio,
+            proSettings: settings.pro
+        });
+    }, [settings.placeholders, guestLayoutId, guestWindow, settings.frameSrc, settings.aspectRatio, settings.pro, sendMessage, settings.layoutOptions]);
 
     useEffect(() => {
         const gapiScript = document.querySelector<HTMLScriptElement>('script[src="https://apis.google.com/js/api.js"]');
@@ -710,19 +769,23 @@ const App: React.FC = () => {
 
         // Printer Pooling Logic (Round Robin Mock)
         let printerName = "Default Printer";
+        let selectedPrinter: Printer | null = null;
         if (settings.pro.printerPool.length > 0) {
-            // Pick a printer (simplified round robin simulation)
-            const printer = settings.pro.printerPool[analytics.totalPrints % settings.pro.printerPool.length];
-            printerName = printer.name;
-            // Update printer job count in settings just for display (in real app, this would be backend)
+            selectedPrinter = settings.pro.printerPool[analytics.totalPrints % settings.pro.printerPool.length];
+            printerName = selectedPrinter.name;
             setSettings(prev => {
                 const pool = [...prev.pro.printerPool];
-                const pIndex = pool.findIndex(p => p.id === printer.id);
+                const pIndex = pool.findIndex(p => p.id === selectedPrinter!.id);
                 if (pIndex > -1) pool[pIndex].jobs++;
                 return { ...prev, pro: { ...prev.pro, printerPool: pool } };
             });
-            console.log(`Printing to Pool: ${printerName} `);
+            console.log(`Printing to Pool: ${printerName}`);
         }
+
+        // Queue job entry (pending -> printing -> done)
+        const jobId = Date.now().toString();
+        const filename = generateFilename();
+        setPrintJobs(prev => [...prev, { id: jobId, printerId: selectedPrinter ? selectedPrinter.id : null, createdAt: Date.now(), status: 'printing', filename }]);
 
         const printWindow = window.open('', '_blank');
         if (printWindow) {
@@ -740,9 +803,12 @@ const App: React.FC = () => {
             printWindow.document.close();
         }
 
-        // If kiosk mode, allow printing then maybe reset? For now just print.
+        // Simulate async completion
+        setTimeout(() => {
+            setPrintJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'done' } : j));
+        }, 2000);
+
         if (settings.pro.enableVending) {
-            // Generate QR code for delivery after print
             handleGenerateQRCode();
         }
 
@@ -1046,7 +1112,7 @@ const App: React.FC = () => {
         return (
             <div className="min-h-screen p-8 flex flex-col items-center">
                 <UiCustomizationPanel isOpen={isUiPanelOpen} onClose={() => setIsUiPanelOpen(false)} config={uiConfig} onConfigChange={setUiConfig} />
-                <SettingsPanel isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} settings={settings} onSettingsChange={setSettings} analytics={analytics} />
+                <SettingsPanel isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} settings={settings} onSettingsChange={setSettings} analytics={analytics} currentGuestLayoutId={guestLayoutId} />
 
                 <header className="w-full max-w-7xl flex justify-between items-center mb-8">
                     <div>
@@ -1057,7 +1123,12 @@ const App: React.FC = () => {
                         <button onClick={() => setIsUiPanelOpen(true)} className="p-2 bg-[var(--color-panel)] rounded-lg hover:bg-black/20" title="Customize UI">
                             <PaletteIcon className="w-6 h-6" />
                         </button>
-                        <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-[var(--color-panel)] rounded-lg hover:bg-black/20" title="Settings"><SettingsIcon /></button>
+                        <button
+                            onClick={() => { if (!isKioskLocked) setIsSettingsOpen(true); }}
+                            disabled={isKioskLocked}
+                            className={`p-2 rounded-lg hover:bg-black/20 ${isKioskLocked ? 'bg-gray-700 cursor-not-allowed' : 'bg-[var(--color-panel)]'}`}
+                            title={isKioskLocked ? 'Locked (Kiosk Mode)' : 'Settings'}
+                        ><SettingsIcon /></button>
                         {guestWindow ? (<button onClick={closeGuestWindow} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Close Guest Window</button>) : (<button onClick={openGuestWindow} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Open Guest Window</button>)}
                     </div>
                 </header>
@@ -1082,6 +1153,7 @@ const App: React.FC = () => {
                             onReorderPhoto={onReorderPhoto}
                             globalPhotoScale={globalPhotoScale}
                             aspectRatio={settings.aspectRatio}
+                            activeGuestLayoutPlaceholders={guestLayoutId ? settings.layoutOptions.find(l => l.id === guestLayoutId)?.placeholders : undefined}
                         />
                         {finalCompositeImage && (
                             <div className="absolute inset-0 pointer-events-none">
@@ -1152,6 +1224,9 @@ const App: React.FC = () => {
                             <button onClick={handleGenerateQRCode} disabled={session.photos.length === 0} className="w-full py-3 bg-blue-500 text-white font-bold rounded-lg hover:bg-blue-600 disabled:bg-gray-600">
                                 Show QR Code on Guest Screen
                             </button>
+                            <button onClick={() => setShowPrinterPanel(p => !p)} className="w-full py-3 bg-gray-700 text-white font-bold rounded-lg hover:bg-gray-600">
+                                {showPrinterPanel ? 'Hide Printer Queue' : 'Show Printer Queue'}
+                            </button>
                         </div>
                     </div>
                 </main>
@@ -1221,14 +1296,70 @@ const App: React.FC = () => {
             <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: uiConfig.backgroundSrc ? `url(${uiConfig.backgroundSrc})` : 'none', opacity: 0.1 }}></div>
             <div className="relative z-10">
                 {appStep === AppStep.FINALIZE_AND_EXPORT ? renderFinalizeStep() : renderSetup()}
+                {(guestLayoutId || guestWindow) && (
+                    <GuestLayoutStatus
+                        guestLayoutId={guestLayoutId}
+                        layouts={settings.layoutOptions}
+                        photosCount={session.photos.length}
+                        frameSrc={settings.frameSrc}
+                        placeholders={guestLayoutId ? (settings.layoutOptions.find(l => l.id === guestLayoutId)?.placeholders.length || 0) : settings.placeholders.length}
+                        onOpenSettings={() => setIsSettingsOpen(true)}
+                    />
+                )}
+                {guestLayoutId && session.isActive && (
+                    <GuestLivePreview
+                        frameSrc={settings.frameSrc}
+                        placeholders={settings.placeholders}
+                        photos={session.photos}
+                        aspectRatio={settings.aspectRatio}
+                        layoutLabel={settings.layoutOptions.find(l => l.id === guestLayoutId)?.label}
+                        onClick={() => setIsSettingsOpen(true)}
+                    />
+                )}
+                {showPrinterPanel && (
+                    <PrinterQueuePanel
+                        printers={settings.pro.printerPool}
+                        jobs={printJobs}
+                        onPause={(id) => setPrintJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'paused' } : j))}
+                        onResume={(id) => setPrintJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'printing' } : j))}
+                        onRemove={(id) => setPrintJobs(prev => prev.filter(j => j.id !== id))}
+                        onClearCompleted={() => setPrintJobs(prev => prev.filter(j => j.status !== 'done'))}
+                        onClose={() => setShowPrinterPanel(false)}
+                    />
+                )}
             </div>
-            <SettingsPanel
-                isOpen={isSettingsOpen}
-                onClose={() => setIsSettingsOpen(false)}
-                settings={settings}
-                onSettingsChange={setSettings}
-                analytics={analytics}
-            />
+            {!isKioskLocked && (
+                <SettingsPanel
+                    isOpen={isSettingsOpen}
+                    onClose={() => setIsSettingsOpen(false)}
+                    settings={settings}
+                    onSettingsChange={setSettings}
+                    analytics={analytics}
+                    currentGuestLayoutId={guestLayoutId}
+                />
+            )}
+            {isKioskLocked && settings.kioskMode && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80">
+                    <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 w-full max-w-sm flex flex-col gap-4">
+                        <h3 className="text-lg font-semibold text-white flex items-center gap-2">Kiosk Locked</h3>
+                        <p className="text-xs text-gray-400">Inactive for {settings.autoResetTimer}s. Enter PIN to unlock.</p>
+                        <input
+                            type="password"
+                            inputMode="numeric"
+                            maxLength={6}
+                            value={unlockAttemptPin}
+                            onChange={(e) => setUnlockAttemptPin(e.target.value.replace(/[^0-9]/g, ''))}
+                            placeholder="PIN"
+                            className="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-white tracking-widest"
+                        />
+                        <div className="flex gap-2">
+                            <button onClick={attemptUnlock} disabled={!unlockAttemptPin} className={`flex-1 py-2 rounded font-semibold ${unlockAttemptPin ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-gray-700 text-gray-400'}`}>Unlock</button>
+                            <button onClick={() => { setUnlockAttemptPin(''); }} className="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 text-white">Clear</button>
+                        </div>
+                        <p className="text-[10px] text-gray-500 text-center">Settings & layout editing disabled until unlocked.</p>
+                    </div>
+                </div>
+            )}
             <UiCustomizationPanel
                 isOpen={isUiPanelOpen}
                 onClose={() => setIsUiPanelOpen(false)}

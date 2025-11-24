@@ -7,6 +7,7 @@ export type OrganizerSettings = {
   localDownloadPath?: string;
   autoResetTimer?: number;
   kioskMode?: boolean;
+  kioskPin?: string; // PIN required to unlock when kiosk mode auto-locks
 };
 
 export interface Printer {
@@ -114,6 +115,7 @@ export interface LayoutOption {
   placeholders: Placeholder[];
   isActive: boolean;
   iconType: 'single' | 'grid' | 'strip' | 'custom';
+  versions?: { timestamp: number; placeholders: Placeholder[]; note?: string }[]; // History for versioning
 }
 
 export interface FrameLayout {

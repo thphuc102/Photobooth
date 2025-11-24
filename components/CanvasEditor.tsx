@@ -28,6 +28,7 @@ interface CanvasEditorProps {
 
     globalPhotoScale: number;
     aspectRatio?: string;
+    activeGuestLayoutPlaceholders?: { id: number; x: number; y: number; width: number; height: number; }[];
 }
 
 type InteractionMode = 'idle' | 'crop_panning' | 'rotating' | 'moving_layer' | 'scaling_layer' | 'drawing';
@@ -58,7 +59,8 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({
     drawingColor = '#ff0000',
     drawingSize = 0.005,
     globalPhotoScale,
-    aspectRatio = '2 / 3'
+    aspectRatio = '2 / 3',
+    activeGuestLayoutPlaceholders
 }) => {
     const [loadedImages, setLoadedImages] = useState<Map<string, HTMLImageElement>>(new Map());
     const interaction = useRef({ mode: 'idle' as InteractionMode, startX: 0, startY: 0, startVal: null as any, startAngle: 0 });
@@ -222,7 +224,22 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({
             ctx.restore();
         });
 
-        // 6. Draw Selection Overlays (if not drawing)
+        // 6. Highlight Active Guest Layout placeholders (outline only)
+        if (activeGuestLayoutPlaceholders && activeGuestLayoutPlaceholders.length > 0) {
+            ctx.save();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+            activeGuestLayoutPlaceholders.forEach(p => {
+                const x = p.x * canvas.width;
+                const y = p.y * canvas.height;
+                const w = p.width * canvas.width;
+                const h = p.height * canvas.height;
+                ctx.strokeRect(x, y, w, h);
+            });
+            ctx.restore();
+        }
+
+        // 7. Draw Selection Overlays (if not drawing)
         if (!isDrawingMode) {
             const dpr = window.devicePixelRatio || 1;
 
@@ -312,7 +329,7 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({
             }
         }
 
-    }, [loadedImages, selectedLayerType, selectedLayerIndex, frameImage, frameOpacity, photos.length, stickers.length, textLayers.length, drawings, filter, globalPhotoScale, isDrawingMode]);
+    }, [loadedImages, selectedLayerType, selectedLayerIndex, frameImage, frameOpacity, photos.length, stickers.length, textLayers.length, drawings, filter, globalPhotoScale, isDrawingMode, activeGuestLayoutPlaceholders]);
 
     useEffect(() => {
         let animationFrameId: number;

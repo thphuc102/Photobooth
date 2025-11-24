@@ -10,9 +10,10 @@ interface SettingsPanelProps {
     settings: AppSettings;
     onSettingsChange: (newSettings: AppSettings) => void;
     analytics?: AnalyticsData;
+    currentGuestLayoutId?: string | null;
 }
 
-const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings, onSettingsChange, analytics }) => {
+const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings, onSettingsChange, analytics, currentGuestLayoutId }) => {
     const [localSettings, setLocalSettings] = useState(settings);
     const [activeTab, setActiveTab] = useState<'general' | 'layouts' | 'pro'>('general');
     const frameInputRef = useRef<HTMLInputElement>(null);
@@ -22,6 +23,33 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
     const [newPrinterName, setNewPrinterName] = useState('');
     const [isEditingLayout, setIsEditingLayout] = useState(false);
     const [editingLayoutId, setEditingLayoutId] = useState<string | null>(null);
+
+    // Layout validation constants & helpers
+    const MIN_PLACEHOLDER_SIZE = 0.05; // relative (5% of canvas)
+    const validatePlaceholders = (placeholders: Placeholder[]): Placeholder[] => {
+        return placeholders.map(p => {
+            let width = Math.max(MIN_PLACEHOLDER_SIZE, Math.min(1, p.width));
+            let height = Math.max(MIN_PLACEHOLDER_SIZE, Math.min(1, p.height));
+            let x = Math.max(0, Math.min(1 - width, p.x));
+            let y = Math.max(0, Math.min(1 - height, p.y));
+            return { ...p, x, y, width, height };
+        });
+    };
+
+    const revertLayoutVersion = (layoutId: string) => {
+        setLocalSettings(prev => {
+            const updated = prev.layoutOptions.map(l => {
+                if (l.id === layoutId && l.versions && l.versions.length > 0) {
+                    const last = l.versions[l.versions.length - 1];
+                    // Push current state before revert for audit trail
+                    const versions = [...l.versions, { timestamp: Date.now(), placeholders: l.placeholders, note: 'pre-revert snapshot' }];
+                    return { ...l, placeholders: last.placeholders, versions };
+                }
+                return l;
+            });
+            return { ...prev, layoutOptions: updated };
+        });
+    };
 
     useEffect(() => {
         setLocalSettings(settings);
@@ -101,10 +129,136 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
         }));
     };
 
+    // Heuristic layout suggestion generator
+    const generateSuggestedLayouts = () => {
+        const suggestions: import('../types').LayoutOption[] = [];
+        const baseId = Date.now();
+        const margin = 0.05;
+        const gap = 0.03;
+        const availW = 1 - margin * 2;
+        const availH = 1 - margin * 2;
+
+        const makeGrid = (rows: number, cols: number, aspect: string | null = null, note: string) => {
+            const w = (availW - gap * (cols - 1)) / cols;
+            const h = (availH - gap * (rows - 1)) / rows;
+            const placeholders: Placeholder[] = [];
+            let idCounter = baseId + suggestions.length * 1000;
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    placeholders.push({
+                        id: idCounter++,
+                        x: margin + c * (w + gap),
+                        y: margin + r * (h + gap),
+                        width: w,
+                        height: h,
+                        aspectRatio: aspect,
+                        fit: 'cover'
+                    });
+                }
+            }
+            suggestions.push({
+                id: `suggest-${rows}x${cols}-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+                label: `${rows}x${cols} Balanced (${note})`,
+                type: 'custom',
+                placeholders,
+                isActive: true,
+                iconType: 'custom',
+                versions: [{ timestamp: Date.now(), placeholders, note: 'generated' }]
+            });
+        };
+
+        makeGrid(1, 2, '3/2', 'landscape pair');
+        makeGrid(2, 3, null, 'social collage');
+        makeGrid(3, 3, null, 'nine grid');
+        makeGrid(2, 4, '3/4', 'dense eight');
+        makeGrid(1, 3, '2/3', 'strip alt');
+
+        setLocalSettings(prev => ({ ...prev, layoutOptions: [...prev.layoutOptions, ...suggestions] }));
+    };
+
+    const exportLayoutsAndFrames = () => {
+        const payload = {
+            layoutOptions: localSettings.layoutOptions,
+            availableFrames: localSettings.availableFrames
+        };
+        const json = JSON.stringify(payload, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `photobooth-config-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    };
+
+    const importLayoutsAndFrames = (file: File) => {
+        const reader = new FileReader();
+        reader.onload = e => {
+            try {
+                const text = e.target?.result as string;
+                const parsed = JSON.parse(text);
+                if (!parsed || typeof parsed !== 'object') throw new Error('Invalid JSON root');
+                const { layoutOptions, availableFrames } = parsed;
+                if (!Array.isArray(layoutOptions) || !Array.isArray(availableFrames)) throw new Error('Missing arrays');
+                // Basic shape validation for placeholders
+                const validateArray = (arr: any[]) => arr.every(o => o && Array.isArray(o.placeholders));
+                if (!validateArray(layoutOptions)) throw new Error('Invalid layout option shape');
+                setLocalSettings(prev => ({
+                    ...prev,
+                    layoutOptions: layoutOptions,
+                    availableFrames: availableFrames
+                }));
+            } catch (err) {
+                alert('Failed to import configuration: ' + (err as Error).message);
+            }
+        };
+        reader.readAsText(file);
+    };
+
+    const importFileInputRef = useRef<HTMLInputElement>(null);
+
     const renderLayoutSettings = () => (
         <div className="space-y-4">
+            {currentGuestLayoutId && (
+                <div className="p-4 rounded-lg border border-indigo-600 bg-indigo-900/30">
+                    <p className="text-sm text-indigo-200">Guest selected layout: <strong>{localSettings.layoutOptions.find(l => l.id === currentGuestLayoutId)?.label || currentGuestLayoutId}</strong></p>
+                    <button
+                        onClick={() => { setEditingLayoutId(currentGuestLayoutId); setIsEditingLayout(true); }}
+                        className="mt-2 px-3 py-2 text-xs font-semibold rounded bg-indigo-600 hover:bg-indigo-500 text-white"
+                    >Edit Active Layout</button>
+                    {currentGuestLayoutId && localSettings.layoutOptions.find(l => l.id === currentGuestLayoutId)?.versions?.length ? (
+                        <button
+                            onClick={() => revertLayoutVersion(currentGuestLayoutId)}
+                            className="mt-2 ml-2 px-3 py-2 text-xs font-semibold rounded bg-yellow-600 hover:bg-yellow-500 text-white"
+                        >Revert Active</button>
+                    ) : null}
+                </div>
+            )}
             <div className="flex justify-between items-center">
                 <h3 className="text-lg font-medium text-white">Layout Presets</h3>
+                <div className="flex gap-2">
+                    <button
+                        onClick={generateSuggestedLayouts}
+                        className="px-3 py-2 text-xs rounded bg-purple-600 hover:bg-purple-500 text-white font-semibold"
+                    >Generate Suggestions</button>
+                    <button
+                        onClick={exportLayoutsAndFrames}
+                        className="px-3 py-2 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+                    >Export JSON</button>
+                    <button
+                        onClick={() => importFileInputRef.current?.click()}
+                        className="px-3 py-2 text-xs rounded bg-teal-600 hover:bg-teal-500 text-white font-semibold"
+                    >Import JSON</button>
+                    <input
+                        type="file"
+                        accept="application/json"
+                        ref={importFileInputRef}
+                        onChange={e => { const f = e.target.files?.[0]; if (f) importLayoutsAndFrames(f); e.target.value=''; }}
+                        className="hidden"
+                    />
+                </div>
             </div>
             <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm text-gray-400">
@@ -130,6 +284,15 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
                                         >
                                             Edit
                                         </button>
+                                        {layout.versions && layout.versions.length > 0 && (
+                                            <button
+                                                onClick={() => revertLayoutVersion(layout.id)}
+                                                className="text-yellow-400 hover:text-yellow-300"
+                                                title="Revert to previous version"
+                                            >
+                                                Revert
+                                            </button>
+                                        )}
                                         {layout.type === 'custom' && (
                                             <button
                                                 onClick={() => handleRemoveLayout(layout.id)}
@@ -250,8 +413,7 @@ const renderProSettings = () => (
 
 const handleLayoutSelectForEditing = (layoutId: string) => {
     if (!localSettings.frameSrc) return;
-
-    const frame = (localSettings.availableFrames || []).find(f => f.src === localSettings.frameSrc);
+    const frame = (localSettings.availableFrames || []).find(f => f.thumbnailSrc === localSettings.frameSrc);
     if (frame) {
         const layoutConfig = frame.supportedLayouts.find(sl => sl.layoutId === layoutId);
         if (layoutConfig) {
@@ -273,11 +435,18 @@ const handleEditGlobalLayout = (layoutId: string) => {
 
 const handleSaveLayoutPlaceholders = (placeholders: Placeholder[]) => {
     if (!editingLayoutId) return;
-
-    const updatedLayouts = localSettings.layoutOptions.map(l =>
-        l.id === editingLayoutId ? { ...l, placeholders } : l
-    );
+    const validated = validatePlaceholders(placeholders);
+    const updatedLayouts = localSettings.layoutOptions.map(l => {
+        if (l.id === editingLayoutId) {
+            const versions = [...(l.versions || []), { timestamp: Date.now(), placeholders: l.placeholders, note: 'edit' }];
+            return { ...l, placeholders: validated, versions };
+        }
+        return l;
+    });
     handleSettingChange('layoutOptions', updatedLayouts);
+    if (currentGuestLayoutId && currentGuestLayoutId === editingLayoutId) {
+        handleSettingChange('placeholders', validated);
+    }
 };
 
     const handleSetDefaultFrame = (frame: import('../types').FrameConfig) => {
@@ -339,6 +508,45 @@ const handleSaveLayoutPlaceholders = (placeholders: Placeholder[]) => {
                     </div>
                 </div>
             </div>
+            <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
+                <h3 className="text-lg font-medium text-white mb-4">Kiosk Mode</h3>
+                <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-300">Enable Kiosk Lock</span>
+                        <input
+                            type="checkbox"
+                            checked={!!localSettings.kioskMode}
+                            onChange={(e) => handleSettingChange('kioskMode', e.target.checked)}
+                        />
+                    </div>
+                    {localSettings.kioskMode && (
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs text-gray-400 mb-1">Auto Lock (seconds)</label>
+                                <input
+                                    type="number"
+                                    min={30}
+                                    value={localSettings.autoResetTimer || 120}
+                                    onChange={(e) => handleSettingChange('autoResetTimer', parseInt(e.target.value, 10))}
+                                    className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-gray-400 mb-1">Unlock PIN</label>
+                                <input
+                                    type="text"
+                                    value={localSettings.kioskPin || ''}
+                                    maxLength={6}
+                                    onChange={(e) => handleSettingChange('kioskPin', e.target.value.replace(/[^0-9]/g, ''))}
+                                    placeholder="Numbers only"
+                                    className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-sm tracking-widest"
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
+                <p className="text-xs text-gray-500 mt-3">When enabled, inactivity locks layout & settings. Unlock requires PIN.</p>
+            </div>
         </div>
     );
 
@@ -379,7 +587,7 @@ return (
                                         defaultValue=""
                                     >
                                         <option value="" disabled>Select a layout to edit...</option>
-                                        {(localSettings.availableFrames?.find(f => f.src === localSettings.frameSrc)?.supportedLayouts || []).map(sl => {
+                                        {(localSettings.availableFrames?.find(f => f.thumbnailSrc === localSettings.frameSrc)?.supportedLayouts || []).map(sl => {
                                             const layoutOption = localSettings.layoutOptions.find(lo => lo.id === sl.layoutId);
                                             return (
                                                 <option key={sl.layoutId} value={sl.layoutId}>
@@ -408,13 +616,13 @@ return (
                                 {/* Frame List */}
                                 {(localSettings.availableFrames || []).map((frame, index) => (
                                     <div key={index} className="relative group aspect-[2/3] bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
-                                        <img src={frame.src} alt={`Frame ${index + 1}`} className="w-full h-full object-contain" />
+                                        <img src={frame.thumbnailSrc} alt={`Frame ${index + 1}`} className="w-full h-full object-contain" />
                                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2">
                                             <button
                                                 onClick={() => handleSetDefaultFrame(frame)}
-                                                className={`px-3 py-1 rounded text-xs font-bold ${localSettings.frameSrc === frame.src ? 'bg-green-600 text-white' : 'bg-white text-black hover:bg-gray-200'}`}
+                                                className={`px-3 py-1 rounded text-xs font-bold ${localSettings.frameSrc === frame.thumbnailSrc ? 'bg-green-600 text-white' : 'bg-white text-black hover:bg-gray-200'}`}
                                             >
-                                                {localSettings.frameSrc === frame.src ? 'Default' : 'Set Default'}
+                                                {localSettings.frameSrc === frame.thumbnailSrc ? 'Default' : 'Set Default'}
                                             </button>
                                             <button
                                                 onClick={() => handleRemoveFrame(index)}
@@ -423,7 +631,7 @@ return (
                                                 Delete
                                             </button>
                                         </div>
-                                        {localSettings.frameSrc === frame.src && (
+                                        {localSettings.frameSrc === frame.thumbnailSrc && (
                                             <div className="absolute top-2 right-2 w-3 h-3 bg-green-500 rounded-full border border-white shadow-sm"></div>
                                         )}
                                     </div>
