@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { AppSettings, PhotoboothSession, AppStep, Placeholder, Photo, Transform, Crop, UiConfig, GuestScreenMode, StickerLayer, TextLayer, AnalyticsData, GuestAction, InterWindowMessage, DrawingPath, Printer, LayoutOption, ProSettings } from './types';
+import { AppSettings, PhotoboothSession, AppStep, Placeholder, Photo, Transform, Crop, UiConfig, GuestScreenMode, StickerLayer, TextLayer, AnalyticsData, GuestAction, InterWindowMessage, DrawingPath, Printer, LayoutOption, ProSettings, CompositorRequest, CompositorResponse } from './types';
+import { t, setLocale } from './i18n/i18n';
 import FrameUploader from './components/FrameUploader';
 import TemplateDesigner from './components/TemplateDesigner';
 import PhotoSelector from './components/PhotoSelector';
@@ -16,6 +17,9 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { SettingsIcon, PaletteIcon } from './components/icons';
 import { useGuestWindow } from './hooks/useGuestWindow';
 import { useHotFolder } from './hooks/useHotFolder';
+import PerformanceHud from './components/PerformanceHud';
+import ErrorBoundary from './components/ErrorBoundary';
+import { persistSettings, loadLatestSettings, persistSession, loadLatestSession } from './storage';
 
 // Initialize Gemini AI Client.
 const apiKey = process.env.API_KEY;
@@ -145,6 +149,7 @@ const App: React.FC = () => {
         fileNameTemplate: 'photobooth-{timestamp}-{number}',
         aspectRatio: '2 / 3',
         kioskMode: false,
+        locale: 'en',
         pro: {
             enableVending: false,
             pricePerPrint: 5.00,
@@ -194,6 +199,12 @@ const App: React.FC = () => {
     const [aiError, setAiError] = useState<string | null>(null);
     const [aiPreviewImage, setAiPreviewImage] = useState<string | null>(null);
     const [finalCompositeImage, setFinalCompositeImage] = useState<string | null>(null);
+    const [workerRenderMs, setWorkerRenderMs] = useState<number>(0);
+    const compositorWorkerRef = useRef<Worker | null>(null);
+    const workerPendingRef = useRef<boolean>(false);
+    const [useWorkerCompositor, setUseWorkerCompositor] = useState<boolean>(true); // future toggle
+    const [perfFps, setPerfFps] = useState(0);
+    const [perfFrameMs, setPerfFrameMs] = useState(0);
 
     // AI Sticker State
     const [aiStickerPrompt, setAiStickerPrompt] = useState('');
@@ -229,14 +240,40 @@ const App: React.FC = () => {
         backgroundColor: '#111827',
         panelColor: '#1f2937',
         borderColor: '#374151',
+        highContrastMode: false,
     });
 
     // Guest Communication Listener
     useEffect(() => {
+        // Load persisted settings & session on boot
+        (async () => {
+            const persisted = await loadLatestSettings<AppSettings>();
+            if (persisted) {
+                setSettings(prev => ({ ...persisted, pro: { ...prev.pro, ...persisted.pro } }));
+            }
+            const lastSession = await loadLatestSession<PhotoboothSession>();
+            if (lastSession) {
+                setSession(lastSession);
+            }
+        })();
         const channel = new BroadcastChannel('photobooth_channel');
         channelRef.current = channel;
 
+        const validateInterWindowMessage = (msg: any): msg is InterWindowMessage => {
+            if (!msg || typeof msg !== 'object') return false;
+            if (msg.type === 'GUEST_ACTION') {
+                const p = msg.payload;
+                if (!p || typeof p !== 'object' || typeof p.type !== 'string') return false;
+                const allowed = ['GUEST_START','GUEST_SELECT_LAYOUT','GUEST_SELECT_FRAME','GUEST_EMAIL','GUEST_PRINT','GUEST_ADD_DRAWING','GUEST_SET_FILTER','GUEST_PAYMENT_COMPLETE'];
+                if (!allowed.includes(p.type)) return false;
+                if (p.type === 'GUEST_EMAIL' && (typeof p.email !== 'string' || p.email.length > 200)) return false;
+                if (p.type === 'GUEST_SELECT_LAYOUT' && typeof p.layout !== 'string') return false;
+                if (p.type === 'GUEST_SELECT_FRAME' && typeof p.frameSrc !== 'string') return false;
+            }
+            return ['SET_STATE','GET_STATE','GUEST_ACTION'].includes(msg.type);
+        };
         const handleGuestAction = (event: MessageEvent<InterWindowMessage>) => {
+            if (!validateInterWindowMessage(event.data)) return; // silently ignore invalid
             if (event.data.type === 'GUEST_ACTION') {
                 const action = event.data.payload;
                 handleGuestActionDispatch(action);
@@ -406,6 +443,18 @@ const App: React.FC = () => {
         });
     }, [settings.placeholders, guestLayoutId, guestWindow, settings.frameSrc, settings.aspectRatio, settings.pro, sendMessage, settings.layoutOptions]);
 
+    // Persist settings and session (debounced)
+    const persistSettingsRef = useRef<number | null>(null);
+    useEffect(() => {
+        if (persistSettingsRef.current) clearTimeout(persistSettingsRef.current);
+        persistSettingsRef.current = window.setTimeout(() => { persistSettings(settings).catch(()=>{}); }, 800);
+    }, [settings]);
+    const persistSessionRef = useRef<number | null>(null);
+    useEffect(() => {
+        if (persistSessionRef.current) clearTimeout(persistSessionRef.current);
+        persistSessionRef.current = window.setTimeout(() => { persistSession(session).catch(()=>{}); }, 800);
+    }, [session]);
+
     useEffect(() => {
         const gapiScript = document.querySelector<HTMLScriptElement>('script[src="https://apis.google.com/js/api.js"]');
         const gisScript = document.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]');
@@ -481,6 +530,12 @@ const App: React.FC = () => {
         root.style.setProperty('--color-panel', uiConfig.panelColor);
         root.style.setProperty('--color-border', uiConfig.borderColor);
         root.style.fontFamily = uiConfig.fontFamily;
+        if (uiConfig.highContrastMode) {
+            root.style.setProperty('--color-background', '#000000');
+            root.style.setProperty('--color-panel', '#000000');
+            root.style.setProperty('--color-text-primary', '#ffffff');
+            root.style.setProperty('--color-border', '#ffffff');
+        }
         if (uiConfig.backgroundSrc) {
             root.style.setProperty('--background-image', `url(${uiConfig.backgroundSrc})`);
         } else {
@@ -488,10 +543,15 @@ const App: React.FC = () => {
         }
     }, [uiConfig]);
 
-    const invalidateAiImage = () => {
-        if (finalCompositeImage) {
-            setFinalCompositeImage(null);
+    // Apply locale changes to global i18n system
+    useEffect(() => {
+        if (settings.locale) {
+            setLocale(settings.locale as any);
         }
+    }, [settings.locale]);
+
+    const invalidateAiImage = () => {
+        if (finalCompositeImage) setFinalCompositeImage(null);
     };
 
     const handleNewPhotosFromHotFolder = useCallback(async (newPhotos: Map<string, string>) => {
@@ -689,13 +749,69 @@ const App: React.FC = () => {
     };
 
     const getImageForExport = useCallback(async (): Promise<string | undefined> => {
-        if (finalCompositeImage) {
-            return finalCompositeImage;
-        }
+        // Prefer worker-produced composite if available
+        if (finalCompositeImage) return finalCompositeImage;
         const canvas = finalCanvasRef.current;
         if (!canvas) return;
         return canvas.toDataURL('image/png');
     }, [finalCompositeImage]);
+
+    // Initialize compositor worker
+    useEffect(() => {
+        if (!useWorkerCompositor) return;
+        if (compositorWorkerRef.current) return;
+        try {
+            const w = new Worker(new URL('./workers/compositorWorker.ts', import.meta.url), { type: 'module' });
+            w.onmessage = (ev: MessageEvent<CompositorResponse>) => {
+                if (ev.data?.type === 'RESULT') {
+                    setFinalCompositeImage(ev.data.dataUrl);
+                    setWorkerRenderMs(ev.data.renderMs);
+                    workerPendingRef.current = false;
+                }
+            };
+            compositorWorkerRef.current = w;
+        } catch (err) {
+            console.warn('Worker compositor unavailable, falling back to main thread canvas.', err);
+            setUseWorkerCompositor(false);
+        }
+    }, [useWorkerCompositor]);
+
+    // Request worker composite when visual layers change (debounced)
+    useEffect(() => {
+        if (!useWorkerCompositor) return;
+        const w = compositorWorkerRef.current;
+        if (!w) return;
+        const canvas = finalCanvasRef.current;
+        if (!canvas) return;
+        // Avoid overlapping renders
+        if (workerPendingRef.current) return;
+        workerPendingRef.current = true;
+        const timeout = window.setTimeout(() => {
+            const msg: CompositorRequest = {
+                type: 'COMPOSITE',
+                width: canvas.width,
+                height: canvas.height,
+                photos: session.photos.map(p => ({
+                    src: p.src,
+                    transform: p.transform,
+                    crop: p.crop,
+                    originalWidth: p.originalWidth,
+                    originalHeight: p.originalHeight,
+                    fit: p.fit
+                })),
+                stickers: session.stickers.map(s => ({ id: s.id, src: s.src, x: s.x, y: s.y, width: s.width, height: s.height, rotation: s.rotation })),
+                textLayers: session.textLayers.map(t => ({ id: t.id, text: t.text, x: t.x, y: t.y, fontSize: t.fontSize, fontFamily: t.fontFamily, color: t.color, rotation: t.rotation, fontWeight: t.fontWeight })),
+                drawings: session.drawings.map(d => ({ id: d.id, points: d.points, color: d.color, width: d.width })),
+                frameSrc: settings.frameSrc,
+                frameOpacity: frameOpacity,
+                filter: session.filter,
+                globalPhotoScale
+            };
+            try { w.postMessage(msg); } catch (err) { workerPendingRef.current = false; }
+        }, 150); // small debounce to batch rapid edits
+        return () => clearTimeout(timeout);
+    }, [session.photos, session.stickers, session.textLayers, session.drawings, settings.frameSrc, frameOpacity, session.filter, globalPhotoScale, useWorkerCompositor]);
+
 
     const generateFilename = useCallback(() => {
         const now = new Date();
@@ -962,7 +1078,13 @@ const App: React.FC = () => {
     const handleUpdateText = (index: number, updates: Partial<TextLayer>) => {
         invalidateAiImage();
         const newTexts = [...session.textLayers];
-        newTexts[index] = { ...newTexts[index], ...updates };
+        const sanitize = (value: string): string => {
+            const stripped = value.replace(/<[^>]*>/g, ''); // remove HTML tags
+            return stripped.slice(0, 300); // limit length
+        };
+        const safeUpdates = { ...updates } as Partial<TextLayer>;
+        if (typeof safeUpdates.text === 'string') safeUpdates.text = sanitize(safeUpdates.text);
+        newTexts[index] = { ...newTexts[index], ...safeUpdates };
         updateSessionWithHistory({ ...session, textLayers: newTexts });
     };
 
@@ -1129,7 +1251,11 @@ const App: React.FC = () => {
                             className={`p-2 rounded-lg hover:bg-black/20 ${isKioskLocked ? 'bg-gray-700 cursor-not-allowed' : 'bg-[var(--color-panel)]'}`}
                             title={isKioskLocked ? 'Locked (Kiosk Mode)' : 'Settings'}
                         ><SettingsIcon /></button>
-                        {guestWindow ? (<button onClick={closeGuestWindow} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Close Guest Window</button>) : (<button onClick={openGuestWindow} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Open Guest Window</button>)}
+                        {guestWindow ? (
+                            <button onClick={closeGuestWindow} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">{t('closeGuestWindow')}</button>
+                        ) : (
+                            <button onClick={openGuestWindow} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">{t('openGuestWindow')}</button>
+                        )}
                     </div>
                 </header>
 
@@ -1154,6 +1280,7 @@ const App: React.FC = () => {
                             globalPhotoScale={globalPhotoScale}
                             aspectRatio={settings.aspectRatio}
                             activeGuestLayoutPlaceholders={guestLayoutId ? settings.layoutOptions.find(l => l.id === guestLayoutId)?.placeholders : undefined}
+                            onMetrics={(m) => { if (m.fps) setPerfFps(m.fps); setPerfFrameMs(m.frameMs); }}
                         />
                         {finalCompositeImage && (
                             <div className="absolute inset-0 pointer-events-none">
@@ -1222,10 +1349,10 @@ const App: React.FC = () => {
                                 onSmartCrop={handleSmartCrop}
                             />
                             <button onClick={handleGenerateQRCode} disabled={session.photos.length === 0} className="w-full py-3 bg-blue-500 text-white font-bold rounded-lg hover:bg-blue-600 disabled:bg-gray-600">
-                                Show QR Code on Guest Screen
+                                {t('showQrCode')}
                             </button>
                             <button onClick={() => setShowPrinterPanel(p => !p)} className="w-full py-3 bg-gray-700 text-white font-bold rounded-lg hover:bg-gray-600">
-                                {showPrinterPanel ? 'Hide Printer Queue' : 'Show Printer Queue'}
+                                {showPrinterPanel ? t('hidePrinterQueue') : t('showPrinterQueue')}
                             </button>
                         </div>
                     </div>
@@ -1292,81 +1419,84 @@ const App: React.FC = () => {
     };
 
     return (
-        <div className="min-h-screen antialiased relative bg-[var(--color-background)] text-[var(--color-text-primary)]">
-            <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: uiConfig.backgroundSrc ? `url(${uiConfig.backgroundSrc})` : 'none', opacity: 0.1 }}></div>
-            <div className="relative z-10">
-                {appStep === AppStep.FINALIZE_AND_EXPORT ? renderFinalizeStep() : renderSetup()}
-                {(guestLayoutId || guestWindow) && (
-                    <GuestLayoutStatus
-                        guestLayoutId={guestLayoutId}
-                        layouts={settings.layoutOptions}
-                        photosCount={session.photos.length}
-                        frameSrc={settings.frameSrc}
-                        placeholders={guestLayoutId ? (settings.layoutOptions.find(l => l.id === guestLayoutId)?.placeholders.length || 0) : settings.placeholders.length}
-                        onOpenSettings={() => setIsSettingsOpen(true)}
-                    />
-                )}
-                {guestLayoutId && session.isActive && (
-                    <GuestLivePreview
-                        frameSrc={settings.frameSrc}
-                        placeholders={settings.placeholders}
-                        photos={session.photos}
-                        aspectRatio={settings.aspectRatio}
-                        layoutLabel={settings.layoutOptions.find(l => l.id === guestLayoutId)?.label}
-                        onClick={() => setIsSettingsOpen(true)}
-                    />
-                )}
-                {showPrinterPanel && (
-                    <PrinterQueuePanel
-                        printers={settings.pro.printerPool}
-                        jobs={printJobs}
-                        onPause={(id) => setPrintJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'paused' } : j))}
-                        onResume={(id) => setPrintJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'printing' } : j))}
-                        onRemove={(id) => setPrintJobs(prev => prev.filter(j => j.id !== id))}
-                        onClearCompleted={() => setPrintJobs(prev => prev.filter(j => j.status !== 'done'))}
-                        onClose={() => setShowPrinterPanel(false)}
-                    />
-                )}
-            </div>
-            {!isKioskLocked && (
-                <SettingsPanel
-                    isOpen={isSettingsOpen}
-                    onClose={() => setIsSettingsOpen(false)}
-                    settings={settings}
-                    onSettingsChange={setSettings}
-                    analytics={analytics}
-                    currentGuestLayoutId={guestLayoutId}
-                />
-            )}
-            {isKioskLocked && settings.kioskMode && (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80">
-                    <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 w-full max-w-sm flex flex-col gap-4">
-                        <h3 className="text-lg font-semibold text-white flex items-center gap-2">Kiosk Locked</h3>
-                        <p className="text-xs text-gray-400">Inactive for {settings.autoResetTimer}s. Enter PIN to unlock.</p>
-                        <input
-                            type="password"
-                            inputMode="numeric"
-                            maxLength={6}
-                            value={unlockAttemptPin}
-                            onChange={(e) => setUnlockAttemptPin(e.target.value.replace(/[^0-9]/g, ''))}
-                            placeholder="PIN"
-                            className="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-white tracking-widest"
+        <ErrorBoundary onReset={() => setSession(s => ({ ...s }))}>
+            <div className={`min-h-screen antialiased relative bg-[var(--color-background)] text-[var(--color-text-primary)] ${uiConfig.highContrastMode ? 'high-contrast' : ''}`}>    
+                <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: uiConfig.backgroundSrc ? `url(${uiConfig.backgroundSrc})` : 'none', opacity: 0.1 }}></div>
+                <div className="relative z-10">
+                    {appStep === AppStep.FINALIZE_AND_EXPORT ? renderFinalizeStep() : renderSetup()}
+                    {(guestLayoutId || guestWindow) && (
+                        <GuestLayoutStatus
+                            guestLayoutId={guestLayoutId}
+                            layouts={settings.layoutOptions}
+                            photosCount={session.photos.length}
+                            frameSrc={settings.frameSrc}
+                            placeholders={guestLayoutId ? (settings.layoutOptions.find(l => l.id === guestLayoutId)?.placeholders.length || 0) : settings.placeholders.length}
+                            onOpenSettings={() => setIsSettingsOpen(true)}
                         />
-                        <div className="flex gap-2">
-                            <button onClick={attemptUnlock} disabled={!unlockAttemptPin} className={`flex-1 py-2 rounded font-semibold ${unlockAttemptPin ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-gray-700 text-gray-400'}`}>Unlock</button>
-                            <button onClick={() => { setUnlockAttemptPin(''); }} className="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 text-white">Clear</button>
-                        </div>
-                        <p className="text-[10px] text-gray-500 text-center">Settings & layout editing disabled until unlocked.</p>
-                    </div>
+                    )}
+                    {guestLayoutId && session.isActive && (
+                        <GuestLivePreview
+                            frameSrc={settings.frameSrc}
+                            placeholders={settings.placeholders}
+                            photos={session.photos}
+                            aspectRatio={settings.aspectRatio}
+                            layoutLabel={settings.layoutOptions.find(l => l.id === guestLayoutId)?.label}
+                            onClick={() => setIsSettingsOpen(true)}
+                        />
+                    )}
+                    {showPrinterPanel && (
+                        <PrinterQueuePanel
+                            printers={settings.pro.printerPool}
+                            jobs={printJobs}
+                            onPause={(id) => setPrintJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'paused' } : j))}
+                            onResume={(id) => setPrintJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'printing' } : j))}
+                            onRemove={(id) => setPrintJobs(prev => prev.filter(j => j.id !== id))}
+                            onClearCompleted={() => setPrintJobs(prev => prev.filter(j => j.status !== 'done'))}
+                            onClose={() => setShowPrinterPanel(false)}
+                        />
+                    )}
+                    <PerformanceHud fps={perfFps} frameMs={perfFrameMs} broadcastIntervalMs={BROADCAST_INTERVAL_MS} />
                 </div>
-            )}
-            <UiCustomizationPanel
-                isOpen={isUiPanelOpen}
-                onClose={() => setIsUiPanelOpen(false)}
-                config={uiConfig}
-                onConfigChange={setUiConfig}
-            />
-        </div>
+                {!isKioskLocked && (
+                    <SettingsPanel
+                        isOpen={isSettingsOpen}
+                        onClose={() => setIsSettingsOpen(false)}
+                        settings={settings}
+                        onSettingsChange={setSettings}
+                        analytics={analytics}
+                        currentGuestLayoutId={guestLayoutId}
+                    />
+                )}
+                {isKioskLocked && settings.kioskMode && (
+                    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80">
+                        <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 w-full max-w-sm flex flex-col gap-4">
+                            <h3 className="text-lg font-semibold text-white flex items-center gap-2">{t('kioskLocked')}</h3>
+                            <p className="text-xs text-gray-400">Inactive for {settings.autoResetTimer}s. Enter PIN to unlock.</p>
+                            <input
+                                type="password"
+                                inputMode="numeric"
+                                maxLength={6}
+                                value={unlockAttemptPin}
+                                onChange={(e) => setUnlockAttemptPin(e.target.value.replace(/[^0-9]/g, ''))}
+                                placeholder="PIN"
+                                className="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-white tracking-widest"
+                            />
+                            <div className="flex gap-2">
+                                <button onClick={attemptUnlock} disabled={!unlockAttemptPin} className={`flex-1 py-2 rounded font-semibold ${unlockAttemptPin ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-gray-700 text-gray-400'}`}>{t('unlock')}</button>
+                                <button onClick={() => { setUnlockAttemptPin(''); }} className="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 text-white">{t('clearPin')}</button>
+                            </div>
+                            <p className="text-[10px] text-gray-500 text-center">Settings & layout editing disabled until unlocked.</p>
+                        </div>
+                    </div>
+                )}
+                <UiCustomizationPanel
+                    isOpen={isUiPanelOpen}
+                    onClose={() => setIsUiPanelOpen(false)}
+                    config={uiConfig}
+                    onConfigChange={setUiConfig}
+                />
+            </div>
+        </ErrorBoundary>
     );
 };
 

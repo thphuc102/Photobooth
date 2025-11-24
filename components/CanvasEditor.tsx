@@ -29,6 +29,7 @@ interface CanvasEditorProps {
     globalPhotoScale: number;
     aspectRatio?: string;
     activeGuestLayoutPlaceholders?: { id: number; x: number; y: number; width: number; height: number; }[];
+    onMetrics?: (m: { fps: number; frameMs: number }) => void;
 }
 
 type InteractionMode = 'idle' | 'crop_panning' | 'rotating' | 'moving_layer' | 'scaling_layer' | 'drawing';
@@ -60,7 +61,8 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({
     drawingSize = 0.005,
     globalPhotoScale,
     aspectRatio = '2 / 3',
-    activeGuestLayoutPlaceholders
+    activeGuestLayoutPlaceholders,
+    onMetrics
 }) => {
     const [loadedImages, setLoadedImages] = useState<Map<string, HTMLImageElement>>(new Map());
     const interaction = useRef({ mode: 'idle' as InteractionMode, startX: 0, startY: 0, startVal: null as any, startAngle: 0 });
@@ -112,7 +114,11 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({
         height: transform.height * canvas.height,
     });
 
+    const lastFrameTimeRef = useRef<number>(performance.now());
+    const fpsAccumRef = useRef<{ frames: number; lastReport: number }>({ frames: 0, lastReport: performance.now() });
+
     const draw = useCallback(() => {
+        const frameStart = performance.now();
         const canvas = canvasRef.current;
         const ctx = canvas?.getContext('2d');
         if (!canvas || !ctx) return;
@@ -329,7 +335,20 @@ const CanvasEditor: React.FC<CanvasEditorProps> = ({
             }
         }
 
-    }, [loadedImages, selectedLayerType, selectedLayerIndex, frameImage, frameOpacity, photos.length, stickers.length, textLayers.length, drawings, filter, globalPhotoScale, isDrawingMode, activeGuestLayoutPlaceholders]);
+        const frameEnd = performance.now();
+        const frameMs = frameEnd - frameStart;
+        fpsAccumRef.current.frames++;
+        const now = frameEnd;
+        if (now - fpsAccumRef.current.lastReport >= 1000) {
+            const fps = (fpsAccumRef.current.frames * 1000) / (now - fpsAccumRef.current.lastReport);
+            if (onMetrics) onMetrics({ fps: Math.round(fps), frameMs: parseFloat(frameMs.toFixed(2)) });
+            fpsAccumRef.current.frames = 0;
+            fpsAccumRef.current.lastReport = now;
+        } else if (onMetrics) {
+            // lightweight update of frame time only
+            onMetrics({ fps: 0, frameMs: parseFloat(frameMs.toFixed(2)) });
+        }
+    }, [loadedImages, selectedLayerType, selectedLayerIndex, frameImage, frameOpacity, photos.length, stickers.length, textLayers.length, drawings, filter, globalPhotoScale, isDrawingMode, activeGuestLayoutPlaceholders, onMetrics]);
 
     useEffect(() => {
         let animationFrameId: number;

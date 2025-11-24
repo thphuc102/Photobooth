@@ -3,6 +3,8 @@ import { Printer, AppSettings, OrganizerSettings, AnalyticsData, Placeholder } f
 import FrameUploader from './FrameUploader'; // Import FrameUploader
 import { GoogleDriveIcon, UploadIcon, FolderIcon, ServerIcon, ChipIcon, SwatchIcon } from './icons';
 import LayoutEditorModal from './LayoutEditorModal';
+import { listLayoutPlugins, setLayoutPluginEnabled } from '../plugins/layoutRegistry';
+import { t } from '../i18n/i18n';
 
 interface SettingsPanelProps {
     isOpen: boolean;
@@ -176,6 +178,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
         setLocalSettings(prev => ({ ...prev, layoutOptions: [...prev.layoutOptions, ...suggestions] }));
     };
 
+    // Security: sanitize values before export
     const exportLayoutsAndFrames = () => {
         const payload = {
             layoutOptions: localSettings.layoutOptions,
@@ -193,6 +196,23 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
         URL.revokeObjectURL(url);
     };
 
+    const sanitizeNumber = (v: any, fallback: number, min: number, max: number) => {
+        const num = typeof v === 'number' && isFinite(v) ? v : fallback;
+        return Math.min(max, Math.max(min, num));
+    };
+
+    const sanitizePlaceholders = (phs: any[]): Placeholder[] => {
+        return phs.filter(p => p && typeof p === 'object').map(p => ({
+            id: typeof p.id === 'number' ? p.id : Date.now(),
+            x: sanitizeNumber(p.x, 0, 0, 1),
+            y: sanitizeNumber(p.y, 0, 0, 1),
+            width: sanitizeNumber(p.width, 0.2, 0.01, 1),
+            height: sanitizeNumber(p.height, 0.2, 0.01, 1),
+            aspectRatio: typeof p.aspectRatio === 'string' || p.aspectRatio === null ? p.aspectRatio : null,
+            fit: p.fit === 'contain' ? 'contain' : 'cover'
+        }));
+    };
+
     const importLayoutsAndFrames = (file: File) => {
         const reader = new FileReader();
         reader.onload = e => {
@@ -202,13 +222,34 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
                 if (!parsed || typeof parsed !== 'object') throw new Error('Invalid JSON root');
                 const { layoutOptions, availableFrames } = parsed;
                 if (!Array.isArray(layoutOptions) || !Array.isArray(availableFrames)) throw new Error('Missing arrays');
-                // Basic shape validation for placeholders
-                const validateArray = (arr: any[]) => arr.every(o => o && Array.isArray(o.placeholders));
-                if (!validateArray(layoutOptions)) throw new Error('Invalid layout option shape');
+                const sanitizedLayoutOptions = layoutOptions.filter((l: any) => l && Array.isArray(l.placeholders)).map((l: any) => ({
+                    id: String(l.id || 'import-' + Date.now() + Math.random()),
+                    label: String(l.label || 'Imported Layout'),
+                    type: l.type === 'preset' ? 'preset' : 'custom',
+                    placeholders: sanitizePlaceholders(l.placeholders),
+                    isActive: !!l.isActive,
+                    iconType: ['single','grid','strip','custom'].includes(l.iconType) ? l.iconType : 'custom',
+                    versions: Array.isArray(l.versions) ? l.versions.slice(0,10).map((v: any) => ({
+                        timestamp: typeof v.timestamp === 'number' ? v.timestamp : Date.now(),
+                        placeholders: sanitizePlaceholders(v.placeholders || []),
+                        note: typeof v.note === 'string' ? v.note : undefined
+                    })) : []
+                }));
+                const sanitizedFrames = availableFrames.filter((f: any) => f && Array.isArray(f.supportedLayouts)).map((f: any) => ({
+                    id: String(f.id || 'frame-' + Date.now() + Math.random()),
+                    name: String(f.name || 'Imported Frame'),
+                    thumbnailSrc: String(f.thumbnailSrc || ''),
+                    isVisible: !!f.isVisible,
+                    supportedLayouts: f.supportedLayouts.filter((sl: any) => sl && Array.isArray(sl.placeholders)).map((sl: any) => ({
+                        layoutId: String(sl.layoutId || 'missing'),
+                        placeholders: sanitizePlaceholders(sl.placeholders),
+                        overlaySrc: typeof sl.overlaySrc === 'string' ? sl.overlaySrc : undefined
+                    }))
+                }));
                 setLocalSettings(prev => ({
                     ...prev,
-                    layoutOptions: layoutOptions,
-                    availableFrames: availableFrames
+                    layoutOptions: sanitizedLayoutOptions,
+                    availableFrames: sanitizedFrames
                 }));
             } catch (err) {
                 alert('Failed to import configuration: ' + (err as Error).message);
@@ -237,20 +278,20 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
                 </div>
             )}
             <div className="flex justify-between items-center">
-                <h3 className="text-lg font-medium text-white">Layout Presets</h3>
+                <h3 className="text-lg font-medium text-white">{t('layoutPresets')}</h3>
                 <div className="flex gap-2">
                     <button
                         onClick={generateSuggestedLayouts}
                         className="px-3 py-2 text-xs rounded bg-purple-600 hover:bg-purple-500 text-white font-semibold"
-                    >Generate Suggestions</button>
+                    >{t('generateSuggestions')}</button>
                     <button
                         onClick={exportLayoutsAndFrames}
                         className="px-3 py-2 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold"
-                    >Export JSON</button>
+                    >{t('exportJson')}</button>
                     <button
                         onClick={() => importFileInputRef.current?.click()}
                         className="px-3 py-2 text-xs rounded bg-teal-600 hover:bg-teal-500 text-white font-semibold"
-                    >Import JSON</button>
+                    >{t('importJson')}</button>
                     <input
                         type="file"
                         accept="application/json"
@@ -258,6 +299,11 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
                         onChange={e => { const f = e.target.files?.[0]; if (f) importLayoutsAndFrames(f); e.target.value=''; }}
                         className="hidden"
                     />
+                    {/* Update checker */}
+                    <button
+                      onClick={() => alert('Stub: would fetch remote manifest and compare.')}
+                      className="px-3 py-2 text-xs rounded bg-indigo-700 hover:bg-indigo-600 text-white font-semibold"
+                    >{t('updateCheck')}</button>
                 </div>
             </div>
             <div className="overflow-x-auto">
@@ -281,17 +327,16 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
                                         <button
                                             onClick={() => handleEditGlobalLayout(layout.id)}
                                             className="text-indigo-400 hover:text-indigo-300"
+                                            aria-label={`Edit layout ${layout.label}`}
                                         >
-                                            Edit
+                                            {t('edit')}
                                         </button>
                                         {layout.versions && layout.versions.length > 0 && (
                                             <button
                                                 onClick={() => revertLayoutVersion(layout.id)}
                                                 className="text-yellow-400 hover:text-yellow-300"
                                                 title="Revert to previous version"
-                                            >
-                                                Revert
-                                            </button>
+                                            >{t('revert')}</button>
                                         )}
                                         {layout.type === 'custom' && (
                                             <button
@@ -309,6 +354,95 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
                     </tbody>
                 </table>
             </div>
+                        {/* Plugin & Diff Section */}
+                                                <div className="mt-6 p-4 rounded-lg border border-gray-700 bg-gray-800/60 space-y-4">
+                                                        <h4 className="text-sm font-semibold text-white flex items-center justify-between">{t('layoutPlugins')}
+                                                                <button
+                                                                    onClick={() => {
+                                                                        // AI semantic suggestion placeholder: create layout with varied aspect ratios
+                                                                        const ts = Date.now();
+                                                                        const placeholders: Placeholder[] = [
+                                                                            { id: ts+1, x:0.05, y:0.05, width:0.4, height:0.5, aspectRatio:'2/3', fit:'cover' },
+                                                                            { id: ts+2, x:0.5, y:0.05, width:0.45, height:0.3, aspectRatio:'16/9', fit:'cover' },
+                                                                            { id: ts+3, x:0.5, y:0.38, width:0.45, height:0.17, aspectRatio:null, fit:'cover' },
+                                                                            { id: ts+4, x:0.05, y:0.6, width:0.25, height:0.35, aspectRatio:'1/1', fit:'cover' },
+                                                                            { id: ts+5, x:0.32, y:0.6, width:0.28, height:0.35, aspectRatio:'4/5', fit:'cover' },
+                                                                            { id: ts+6, x:0.62, y:0.6, width:0.33, height:0.35, aspectRatio:'3/4', fit:'cover' }
+                                                                        ];
+                                                                        const newLayout: import('../types').LayoutOption = {
+                                                                            id: `ai-suggest-${ts}`,
+                                                                            label: 'AI Semantic Mix',
+                                                                            type: 'custom',
+                                                                            placeholders,
+                                                                            isActive: true,
+                                                                            iconType: 'custom',
+                                                                            versions: [{ timestamp: ts, placeholders, note: 'ai-suggest' }]
+                                                                        };
+                                                                        setLocalSettings(prev => ({ ...prev, layoutOptions: [...prev.layoutOptions, newLayout] }));
+                                                                    }}
+                                                                    className="px-3 py-1 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white"
+                                                                >{t('aiSuggestLayout')}</button>
+                                                        </h4>
+                                                        <div className="space-y-2">
+                                                                {listLayoutPlugins().map(p => (
+                                                                        <div key={p.id} className="flex items-center justify-between bg-gray-900 px-3 py-2 rounded">
+                                                                                <div className="flex flex-col">
+                                                                                        <span className="text-xs text-white font-semibold">{p.label}</span>
+                                                                                        <span className="text-[10px] text-gray-400">v{p.version}</span>
+                                                                                </div>
+                                                                                <div className="flex items-center gap-2">
+                                                                                        <button
+                                                                                            onClick={() => setLayoutPluginEnabled(p.id, !p.enabled)}
+                                                                                            className={`px-2 py-1 text-[10px] rounded ${p.enabled ? 'bg-green-600 hover:bg-green-500' : 'bg-gray-700 hover:bg-gray-600'} text-white`}
+                                                                                        >{p.enabled ? t('disablePlugin') : t('enablePlugin')}</button>
+                                                                                        <button
+                                                                                            disabled={!p.enabled || !p.generate}
+                                                                                            onClick={() => {
+                                                                                                if (!p.enabled || !p.generate) return;
+                                                                                                const result = p.generate({ existingLayouts: localSettings.layoutOptions, canvasAspectRatio: localSettings.aspectRatio });
+                                                                                                if (result.placeholders.length) {
+                                                                                                    const newLayout: import('../types').LayoutOption = {
+                                                                                                        id: `plugin-${p.id}-${Date.now()}`,
+                                                                                                        label: p.label,
+                                                                                                        type: 'custom',
+                                                                                                        placeholders: result.placeholders,
+                                                                                                        isActive: true,
+                                                                                                        iconType: 'custom',
+                                                                                                        versions: [{ timestamp: Date.now(), placeholders: result.placeholders, note: 'plugin-gen' }]
+                                                                                                    };
+                                                                                                    setLocalSettings(prev => ({ ...prev, layoutOptions: [...prev.layoutOptions, newLayout] }));
+                                                                                                }
+                                                                                            }}
+                                                                                            className={`px-2 py-1 text-[10px] rounded ${p.enabled ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-gray-800 text-gray-500'} disabled:opacity-50`}
+                                                                                        >Run</button>
+                                                                                </div>
+                                                                        </div>
+                                                                ))}
+                                                        </div>
+                            <button
+                                onClick={() => {
+                                    // Simple diff: compare counts & first placeholder changes
+                                    const originalMap = new Map(settings.layoutOptions.map(l => [l.id, l]));
+                                    const diffs: string[] = [];
+                                    localSettings.layoutOptions.forEach(l => {
+                                        const orig = originalMap.get(l.id);
+                                        if (!orig) diffs.push(`+ Added layout ${l.label}`);
+                                        else if (orig.placeholders.length !== l.placeholders.length) diffs.push(`* ${l.label} slot count ${orig.placeholders.length} -> ${l.placeholders.length}`);
+                                        else {
+                                            // Check first placeholder shift
+                                            if (orig.placeholders[0] && l.placeholders[0]) {
+                                                const dx = Math.abs(orig.placeholders[0].x - l.placeholders[0].x);
+                                                const dy = Math.abs(orig.placeholders[0].y - l.placeholders[0].y);
+                                                if (dx > 0.001 || dy > 0.001) diffs.push(`* ${l.label} first slot moved`);
+                                            }
+                                        }
+                                    });
+                                    originalMap.forEach((v, k) => { if (!localSettings.layoutOptions.find(l => l.id === k)) diffs.push(`- Removed layout ${v.label}`); });
+                                    alert(diffs.length ? diffs.join('\n') : 'No structural layout differences detected.');
+                                }}
+                                className="mt-2 px-3 py-2 text-xs rounded bg-gray-700 hover:bg-gray-600 text-white font-semibold"
+                            >{t('diffLayouts')}</button>
+                        </div>
         </div>
     );
 
@@ -486,7 +620,7 @@ const handleSaveLayoutPlaceholders = (placeholders: Placeholder[]) => {
     const renderGeneralSettings = () => (
         <div className="space-y-6">
              <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
-                <h3 className="text-lg font-medium text-white mb-4">Directories</h3>
+                <h3 className="text-lg font-medium text-white mb-4">Directories & Locale</h3>
                 <div className="space-y-4">
                     <div>
                         <label className="block text-sm font-medium text-gray-400 mb-1">Hot Folder (Input)</label>
@@ -506,6 +640,17 @@ const handleSaveLayoutPlaceholders = (placeholders: Placeholder[]) => {
                             </button>
                         </div>
                     </div>
+                                        <div>
+                                                <label className="block text-sm font-medium text-gray-400 mb-1">Locale</label>
+                                                <select
+                                                    value={localSettings.locale || 'en'}
+                                                    onChange={(e) => handleSettingChange('locale', e.target.value)}
+                                                    className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-gray-300 text-sm"
+                                                >
+                                                    <option value="en">English</option>
+                                                    <option value="vi">Tiếng Việt</option>
+                                                </select>
+                                        </div>
                 </div>
             </div>
             <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">

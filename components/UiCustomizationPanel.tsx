@@ -77,13 +77,25 @@ const UiCustomizationPanel: React.FC<UiCustomizationPanelProps> = ({ isOpen, onC
             <label htmlFor="footer" className="block text-sm font-medium opacity-80">Footer Text</label>
             <input type="text" id="footer" value={config.footer} onChange={(e) => onConfigChange({ ...config, footer: e.target.value })} className="mt-1 block w-full bg-[var(--color-background)] border border-[var(--color-border)] rounded-md p-2 text-sm focus:ring-[var(--color-primary)] focus:border-[var(--color-primary)]" />
           </div>
+                <div className="flex items-center justify-between pt-2 border-t border-white/10">
+                    <label htmlFor="highContrastMode" className="text-sm opacity-70">High Contrast</label>
+                    <input
+                      id="highContrastMode"
+                      type="checkbox"
+                      checked={!!config.highContrastMode}
+                      onChange={(e) => onConfigChange({ ...config, highContrastMode: e.target.checked })}
+                      aria-checked={!!config.highContrastMode}
+                      aria-label="Toggle high contrast mode"
+                      className="w-5 h-5 cursor-pointer accent-[var(--color-primary)]"
+                    />
+                </div>
            <div>
                 <label htmlFor="font" className="block text-sm font-medium opacity-80">Font Family</label>
                 <select id="font" value={config.fontFamily} onChange={(e) => onConfigChange({ ...config, fontFamily: e.target.value })} className="mt-1 block w-full bg-[var(--color-background)] border border-[var(--color-border)] rounded-md p-2 text-sm focus:ring-[var(--color-primary)] focus:border-[var(--color-primary)]">
                     {fontOptions.map(font => (
-                        <option key={font.value} value={font.value}>{font.label}</option>
-                    ))}
-                </select>
+            <button onClick={onClose} className="w-full px-4 py-2 bg-[var(--color-primary)] text-white font-semibold rounded-lg shadow-md filter hover:brightness-110" aria-label="Close panel and apply changes">
+                Done
+            </button>
             </div>
           
           {/* Logo Uploader */}

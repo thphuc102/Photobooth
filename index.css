@@ -1,0 +1,40 @@
+/* Base minimal styles & accessibility helpers */
+:root {
+  --focus-ring: 0 0 0 3px rgba(139,92,246,0.6);
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin:0; padding:0; }
+
+body:focus-visible { outline:none; }
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar { width:10px; }
+::-webkit-scrollbar-track { background:#111827; }
+::-webkit-scrollbar-thumb { background:#374151; border-radius:6px; }
+::-webkit-scrollbar-thumb:hover { background:#4b5563; }
+
+/* Focus states */
+button:focus-visible, [role="button"]:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Utility */
+.visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
+
+/* High Contrast Mode Overrides */
+.high-contrast {
+  --color-background: #000000 !important;
+  --color-panel: #000000 !important;
+  --color-text-primary: #ffffff !important;
+  --color-border: #ffffff !important;
+}
+.high-contrast *, .high-contrast *:focus-visible {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+.high-contrast button, .high-contrast input, .high-contrast select, .high-contrast textarea {
+  border: 1px solid var(--color-border) !important;
+}

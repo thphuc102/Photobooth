@@ -8,6 +8,8 @@ export type OrganizerSettings = {
   autoResetTimer?: number;
   kioskMode?: boolean;
   kioskPin?: string; // PIN required to unlock when kiosk mode auto-locks
+  userRole?: 'admin' | 'operator'; // role gating sensitive actions
+  locale?: string; // current UI locale key
 };
 
 export interface Printer {
@@ -118,6 +120,68 @@ export interface LayoutOption {
   versions?: { timestamp: number; placeholders: Placeholder[]; note?: string }[]; // History for versioning
 }
 
+// Experimental plugin API for layout generation & validation
+export interface LayoutPluginResult {
+  placeholders: Placeholder[];
+  notes?: string[];
+}
+
+export interface LayoutValidationIssue {
+  message: string;
+  severity: 'info' | 'warning' | 'error';
+}
+
+export interface LayoutPluginContext {
+  existingLayouts: LayoutOption[];
+  canvasAspectRatio: string;
+}
+
+export interface LayoutPlugin {
+  id: string;
+  label: string;
+  version: string;
+  generate?: (ctx: LayoutPluginContext, options?: Record<string, any>) => LayoutPluginResult;
+  validate?: (placeholders: Placeholder[], ctx: LayoutPluginContext) => LayoutValidationIssue[];
+  author?: string;
+  description?: string;
+}
+
+export type RegisteredLayoutPlugin = LayoutPlugin & { enabled: boolean };
+
+// Worker compositor messaging types
+export interface CompositorPhotoLayer {
+  src: string;
+  transform: Transform;
+  crop: Crop;
+  originalWidth: number;
+  originalHeight: number;
+  fit?: 'cover' | 'contain';
+}
+
+export interface CompositorStickerLayer { id: string; src: string; x: number; y: number; width: number; height: number; rotation: number; }
+export interface CompositorTextLayer { id: string; text: string; x: number; y: number; fontSize: number; fontFamily: string; color: string; rotation: number; fontWeight: string; }
+export interface CompositorDrawingPath { id: string; points: { x: number; y: number }[]; color: string; width: number; }
+
+export interface CompositorRequest {
+  type: 'COMPOSITE';
+  width: number;
+  height: number;
+  photos: CompositorPhotoLayer[];
+  stickers: CompositorStickerLayer[];
+  textLayers: CompositorTextLayer[];
+  drawings: CompositorDrawingPath[];
+  frameSrc: string | null;
+  frameOpacity: number;
+  filter: string;
+  globalPhotoScale: number;
+}
+
+export interface CompositorResponse {
+  type: 'RESULT';
+  dataUrl: string;
+  renderMs: number;
+}
+
 export interface FrameLayout {
   layoutId: string; // e.g., 'strip-3', 'grid-2x2'
   placeholders: Placeholder[];
@@ -203,6 +267,7 @@ export interface UiConfig {
   backgroundColor: string;
   panelColor: string;
   borderColor: string;
+  highContrastMode?: boolean; // accessibility toggle
 }
 
 export interface AnalyticsData {
