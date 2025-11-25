@@ -19,6 +19,8 @@ import { useGuestWindow } from './hooks/useGuestWindow';
 import { useHotFolder } from './hooks/useHotFolder';
 import PerformanceHud from './components/PerformanceHud';
 import ErrorBoundary from './components/ErrorBoundary';
+import ToastContainer, { useToast } from './components/Toast';
+import LoadingSpinner from './components/LoadingSpinner';
 import { persistSettings, loadLatestSettings, persistSession, loadLatestSession } from './storage';
 
 // Initialize Gemini AI Client.
@@ -52,6 +54,26 @@ const hexToRgb = (hex: string): string => {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return result ? `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)} ` : '255, 255, 255';
 };
+
+const FILTER_PRESETS = [
+    { label: 'None', value: '' },
+    { label: 'Grayscale', value: 'grayscale(100%)' },
+    { label: 'Sepia', value: 'sepia(0.8)' },
+    { label: 'Vintage', value: 'sepia(0.4) contrast(1.1) brightness(1.1)' },
+    { label: 'High Contrast', value: 'contrast(1.5) saturate(1.3)' },
+    { label: 'Noir', value: 'grayscale(1) contrast(1.3) brightness(0.9)' },
+    { label: 'Warm', value: 'sepia(0.2) saturate(1.2) brightness(1.1)' },
+    { label: 'Cool', value: 'hue-rotate(20deg) saturate(0.9)' },
+    { label: 'Cyberpunk', value: 'saturate(1.6) hue-rotate(-10deg) contrast(1.2)' },
+    { label: 'Faded', value: 'contrast(0.8) brightness(1.2) saturate(0.7)' }
+];
+
+const EXPORT_FORMATS = [
+    { label: 'PNG (High Quality)', value: 'png', mimeType: 'image/png' },
+    { label: 'JPEG (Best)', value: 'jpeg-100', mimeType: 'image/jpeg', quality: 1.0 },
+    { label: 'JPEG (High)', value: 'jpeg-90', mimeType: 'image/jpeg', quality: 0.9 },
+    { label: 'JPEG (Medium)', value: 'jpeg-80', mimeType: 'image/jpeg', quality: 0.8 },
+];
 
 const generateDefaultLayouts = (): LayoutOption[] => {
     const baseId = Date.now();
@@ -205,6 +227,10 @@ const App: React.FC = () => {
     const [useWorkerCompositor, setUseWorkerCompositor] = useState<boolean>(true); // future toggle
     const [perfFps, setPerfFps] = useState(0);
     const [perfFrameMs, setPerfFrameMs] = useState(0);
+    const { toasts, addToast, removeToast } = useToast();
+    const [isSaving, setIsSaving] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [exportFormat, setExportFormat] = useState('png');
 
     // AI Sticker State
     const [aiStickerPrompt, setAiStickerPrompt] = useState('');
@@ -243,17 +269,36 @@ const App: React.FC = () => {
         highContrastMode: false,
     });
 
+    // Additional state that must be declared before useEffect hooks
+    const [guestLayoutId, setGuestLayoutId] = useState<string | null>(null);
+    const lastGuestBroadcastRef = useRef<number>(0);
+    const BROADCAST_INTERVAL_MS = 300; // throttle interval
+    const [printJobs, setPrintJobs] = useState<PrintJob[]>([]);
+    const [showPrinterPanel, setShowPrinterPanel] = useState(false);
+    const [isKioskLocked, setIsKioskLocked] = useState(false);
+    const lastActivityRef = useRef<number>(Date.now());
+    const [unlockAttemptPin, setUnlockAttemptPin] = useState('');
+    const handleActivity = () => { lastActivityRef.current = Date.now(); if (isKioskLocked) return; };
+
+    const [isInitializing, setIsInitializing] = useState(true);
+
     // Guest Communication Listener
     useEffect(() => {
         // Load persisted settings & session on boot
         (async () => {
-            const persisted = await loadLatestSettings<AppSettings>();
-            if (persisted) {
-                setSettings(prev => ({ ...persisted, pro: { ...prev.pro, ...persisted.pro } }));
-            }
-            const lastSession = await loadLatestSession<PhotoboothSession>();
-            if (lastSession) {
-                setSession(lastSession);
+            try {
+                const persisted = await loadLatestSettings<AppSettings>();
+                if (persisted) {
+                    setSettings(prev => ({ ...persisted, pro: { ...prev.pro, ...persisted.pro } }));
+                }
+                const lastSession = await loadLatestSession<PhotoboothSession>();
+                if (lastSession) {
+                    setSession(lastSession);
+                }
+            } catch (error) {
+                console.error('Failed to load persisted data:', error);
+            } finally {
+                setIsInitializing(false);
             }
         })();
         const channel = new BroadcastChannel('photobooth_channel');
@@ -287,17 +332,6 @@ const App: React.FC = () => {
         };
     }, [settings.placeholders, session, settings.layoutOptions]); // Dependency on settings/session for callbacks
 
-    const [guestLayoutId, setGuestLayoutId] = useState<string | null>(null);
-    const lastGuestBroadcastRef = useRef<number>(0);
-    const BROADCAST_INTERVAL_MS = 300; // throttle interval
-    // Printer queue job tracking
-    const [printJobs, setPrintJobs] = useState<PrintJob[]>([]);
-    const [showPrinterPanel, setShowPrinterPanel] = useState(false);
-    // Kiosk lock tracking
-    const [isKioskLocked, setIsKioskLocked] = useState(false);
-    const lastActivityRef = useRef<number>(Date.now());
-    const [unlockAttemptPin, setUnlockAttemptPin] = useState('');
-    const handleActivity = () => { lastActivityRef.current = Date.now(); if (isKioskLocked) return; };
     useEffect(() => {
         const events = ['pointermove', 'keydown', 'click'];
         events.forEach(ev => window.addEventListener(ev, handleActivity));
@@ -319,8 +353,9 @@ const App: React.FC = () => {
             setIsKioskLocked(false);
             setUnlockAttemptPin('');
             lastActivityRef.current = Date.now();
+            addToast('Unlocked successfully', 'success');
         } else {
-            alert('Incorrect PIN');
+            addToast('Incorrect PIN', 'error');
         }
     };
 
@@ -447,12 +482,18 @@ const App: React.FC = () => {
     const persistSettingsRef = useRef<number | null>(null);
     useEffect(() => {
         if (persistSettingsRef.current) clearTimeout(persistSettingsRef.current);
-        persistSettingsRef.current = window.setTimeout(() => { persistSettings(settings).catch(()=>{}); }, 800);
+        setIsSaving(true);
+        persistSettingsRef.current = window.setTimeout(() => { 
+            persistSettings(settings).then(() => setIsSaving(false)).catch(() => setIsSaving(false)); 
+        }, 800);
     }, [settings]);
     const persistSessionRef = useRef<number | null>(null);
     useEffect(() => {
         if (persistSessionRef.current) clearTimeout(persistSessionRef.current);
-        persistSessionRef.current = window.setTimeout(() => { persistSession(session).catch(()=>{}); }, 800);
+        setIsSaving(true);
+        persistSessionRef.current = window.setTimeout(() => { 
+            persistSession(session).then(() => setIsSaving(false)).catch(() => setIsSaving(false)); 
+        }, 800);
     }, [session]);
 
     useEffect(() => {
@@ -695,7 +736,7 @@ const App: React.FC = () => {
 
     const handleUseHotFolder = () => {
         if (!settings.hotFolderHandle) {
-            alert("Please select a hot folder in the settings first.");
+            addToast("Please select a hot folder in the settings first.", 'warning');
             setIsSettingsOpen(true);
             return;
         }
@@ -742,19 +783,42 @@ const App: React.FC = () => {
     const handleGenerateQRCode = async () => {
         const image = await getImageForExport();
         if (!image) {
-            alert("Could not generate final image.");
+            addToast("Could not generate final image.", 'error');
             return;
         }
         sendMessage({ mode: GuestScreenMode.DELIVERY, qrCodeValue: image, frameSrc: settings.frameSrc });
     };
 
     const getImageForExport = useCallback(async (): Promise<string | undefined> => {
-        // Prefer worker-produced composite if available
-        if (finalCompositeImage) return finalCompositeImage;
-        const canvas = finalCanvasRef.current;
-        if (!canvas) return;
-        return canvas.toDataURL('image/png');
-    }, [finalCompositeImage]);
+        // Prefer worker-produced composite if available, but convert to correct format
+        let sourceImage = finalCompositeImage;
+        if (!sourceImage) {
+            const canvas = finalCanvasRef.current;
+            if (!canvas) return;
+            sourceImage = canvas.toDataURL('image/png');
+        }
+        
+        // Convert to selected format if needed
+        const format = EXPORT_FORMATS.find(f => f.value === exportFormat);
+        if (!format || exportFormat === 'png') return sourceImage;
+        
+        // Convert PNG to JPEG
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = img.width;
+                tempCanvas.height = img.height;
+                const ctx = tempCanvas.getContext('2d');
+                if (!ctx) return resolve(sourceImage);
+                ctx.fillStyle = '#FFFFFF'; // white background for JPEG
+                ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+                ctx.drawImage(img, 0, 0);
+                resolve(tempCanvas.toDataURL(format.mimeType, format.quality));
+            };
+            img.src = sourceImage!;
+        });
+    }, [finalCompositeImage, exportFormat]);
 
     // Initialize compositor worker
     useEffect(() => {
@@ -819,6 +883,7 @@ const App: React.FC = () => {
         const time = now.toTimeString().split(' ')[0].replace(/:/g, '-');
         const timestamp = now.getTime();
         const number = String(fileCounter.current).padStart(4, '0');
+        const ext = exportFormat.startsWith('jpeg') ? 'jpg' : 'png';
 
         const filename = settings.fileNameTemplate
             .replace('{date}', date)
@@ -826,13 +891,13 @@ const App: React.FC = () => {
             .replace('{timestamp}', String(timestamp))
             .replace('{number}', number);
 
-        return `${filename}.png`;
-    }, [settings.fileNameTemplate]);
+        return `${filename}.${ext}`;
+    }, [settings.fileNameTemplate, exportFormat]);
 
     const handleDownload = useCallback(async () => {
         const image = await getImageForExport();
         if (!image) {
-            alert("Could not generate final image for download.");
+            addToast("Could not generate final image for download.", 'error');
             return;
         }
         const filename = generateFilename();
@@ -846,10 +911,10 @@ const App: React.FC = () => {
                 const writable = await fileHandle.createWritable();
                 await writable.write(blob);
                 await writable.close();
-                console.log(`Saved ${filename} to selected folder.`);
+                addToast(`Saved ${filename}`, 'success');
             } catch (error) {
                 console.error("Error saving to directory handle:", error);
-                alert("Failed to save to the selected folder. Downloading via browser instead.");
+                addToast("Failed to save to folder. Downloading via browser...", 'warning');
                 const link = document.createElement('a');
                 link.href = image;
                 link.download = filename;
@@ -1348,6 +1413,32 @@ const App: React.FC = () => {
                                 enableSmartCrop={settings.pro.enableSmartCrop}
                                 onSmartCrop={handleSmartCrop}
                             />
+                            <div className="bg-[var(--color-panel)] border border-[var(--color-border)] rounded-lg p-4 space-y-3">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-400 mb-2">Filter Preset</label>
+                                    <select
+                                        value={session.filter}
+                                        onChange={(e) => updateSessionWithHistory({ ...session, filter: e.target.value })}
+                                        className="w-full bg-[var(--color-background)] border border-[var(--color-border)] rounded px-3 py-2 text-sm"
+                                    >
+                                        {FILTER_PRESETS.map(f => (
+                                            <option key={f.value} value={f.value}>{f.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-400 mb-2">Export Format</label>
+                                    <select
+                                        value={exportFormat}
+                                        onChange={(e) => setExportFormat(e.target.value)}
+                                        className="w-full bg-[var(--color-background)] border border-[var(--color-border)] rounded px-3 py-2 text-sm"
+                                    >
+                                        {EXPORT_FORMATS.map(f => (
+                                            <option key={f.value} value={f.value}>{f.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
                             <button onClick={handleGenerateQRCode} disabled={session.photos.length === 0} className="w-full py-3 bg-blue-500 text-white font-bold rounded-lg hover:bg-blue-600 disabled:bg-gray-600">
                                 {t('showQrCode')}
                             </button>
@@ -1420,10 +1511,15 @@ const App: React.FC = () => {
 
     return (
         <ErrorBoundary onReset={() => setSession(s => ({ ...s }))}>
-            <div className={`min-h-screen antialiased relative bg-[var(--color-background)] text-[var(--color-text-primary)] ${uiConfig.highContrastMode ? 'high-contrast' : ''}`}>    
-                <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: uiConfig.backgroundSrc ? `url(${uiConfig.backgroundSrc})` : 'none', opacity: 0.1 }}></div>
-                <div className="relative z-10">
-                    {appStep === AppStep.FINALIZE_AND_EXPORT ? renderFinalizeStep() : renderSetup()}
+            {isInitializing ? (
+                <div className="min-h-screen flex items-center justify-center bg-gray-900">
+                    <LoadingSpinner size="lg" />
+                </div>
+            ) : (
+                <div className={`min-h-screen antialiased relative bg-[var(--color-background)] text-[var(--color-text-primary)] ${uiConfig.highContrastMode ? 'high-contrast' : ''}`}>    
+                    <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: uiConfig.backgroundSrc ? `url(${uiConfig.backgroundSrc})` : 'none', opacity: 0.1 }}></div>
+                    <div className="relative z-10">
+                        {appStep === AppStep.FINALIZE_AND_EXPORT ? renderFinalizeStep() : renderSetup()}
                     {(guestLayoutId || guestWindow) && (
                         <GuestLayoutStatus
                             guestLayoutId={guestLayoutId}
@@ -1456,46 +1552,54 @@ const App: React.FC = () => {
                         />
                     )}
                     <PerformanceHud fps={perfFps} frameMs={perfFrameMs} broadcastIntervalMs={BROADCAST_INTERVAL_MS} />
-                </div>
-                {!isKioskLocked && (
-                    <SettingsPanel
-                        isOpen={isSettingsOpen}
-                        onClose={() => setIsSettingsOpen(false)}
-                        settings={settings}
-                        onSettingsChange={setSettings}
-                        analytics={analytics}
-                        currentGuestLayoutId={guestLayoutId}
-                    />
-                )}
-                {isKioskLocked && settings.kioskMode && (
-                    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80">
-                        <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 w-full max-w-sm flex flex-col gap-4">
-                            <h3 className="text-lg font-semibold text-white flex items-center gap-2">{t('kioskLocked')}</h3>
-                            <p className="text-xs text-gray-400">Inactive for {settings.autoResetTimer}s. Enter PIN to unlock.</p>
-                            <input
-                                type="password"
-                                inputMode="numeric"
-                                maxLength={6}
-                                value={unlockAttemptPin}
-                                onChange={(e) => setUnlockAttemptPin(e.target.value.replace(/[^0-9]/g, ''))}
-                                placeholder="PIN"
-                                className="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-white tracking-widest"
-                            />
-                            <div className="flex gap-2">
-                                <button onClick={attemptUnlock} disabled={!unlockAttemptPin} className={`flex-1 py-2 rounded font-semibold ${unlockAttemptPin ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-gray-700 text-gray-400'}`}>{t('unlock')}</button>
-                                <button onClick={() => { setUnlockAttemptPin(''); }} className="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 text-white">{t('clearPin')}</button>
-                            </div>
-                            <p className="text-[10px] text-gray-500 text-center">Settings & layout editing disabled until unlocked.</p>
+                    {isSaving && (
+                        <div className="fixed bottom-4 left-4 z-[90] bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 flex items-center gap-2 shadow-lg">
+                            <LoadingSpinner size="sm" />
+                            <span className="text-xs text-gray-300">Auto-saving...</span>
                         </div>
+                    )}
+                    <ToastContainer toasts={toasts} onRemove={removeToast} />
                     </div>
-                )}
-                <UiCustomizationPanel
-                    isOpen={isUiPanelOpen}
-                    onClose={() => setIsUiPanelOpen(false)}
-                    config={uiConfig}
-                    onConfigChange={setUiConfig}
-                />
-            </div>
+                    {!isKioskLocked && (
+                        <SettingsPanel
+                            isOpen={isSettingsOpen}
+                            onClose={() => setIsSettingsOpen(false)}
+                            settings={settings}
+                            onSettingsChange={setSettings}
+                            analytics={analytics}
+                            currentGuestLayoutId={guestLayoutId}
+                        />
+                    )}
+                    {isKioskLocked && settings.kioskMode && (
+                        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80">
+                            <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 w-full max-w-sm flex flex-col gap-4">
+                                <h3 className="text-lg font-semibold text-white flex items-center gap-2">{t('kioskLocked')}</h3>
+                                <p className="text-xs text-gray-400">Inactive for {settings.autoResetTimer}s. Enter PIN to unlock.</p>
+                                <input
+                                    type="password"
+                                    inputMode="numeric"
+                                    maxLength={6}
+                                    value={unlockAttemptPin}
+                                    onChange={(e) => setUnlockAttemptPin(e.target.value.replace(/[^0-9]/g, ''))}
+                                    placeholder="PIN"
+                                    className="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-white tracking-widest"
+                                />
+                                <div className="flex gap-2">
+                                    <button onClick={attemptUnlock} disabled={!unlockAttemptPin} className={`flex-1 py-2 rounded font-semibold ${unlockAttemptPin ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-gray-700 text-gray-400'}`}>{t('unlock')}</button>
+                                    <button onClick={() => { setUnlockAttemptPin(''); }} className="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 text-white">{t('clearPin')}</button>
+                                </div>
+                                <p className="text-[10px] text-gray-500 text-center">Settings & layout editing disabled until unlocked.</p>
+                            </div>
+                        </div>
+                    )}
+                    <UiCustomizationPanel
+                        isOpen={isUiPanelOpen}
+                        onClose={() => setIsUiPanelOpen(false)}
+                        config={uiConfig}
+                        onConfigChange={setUiConfig}
+                    />
+                </div>
+            )}
         </ErrorBoundary>
     );
 };

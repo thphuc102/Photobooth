@@ -25,6 +25,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
     const [newPrinterName, setNewPrinterName] = useState('');
     const [isEditingLayout, setIsEditingLayout] = useState(false);
     const [editingLayoutId, setEditingLayoutId] = useState<string | null>(null);
+    const [cachedPlugins, setCachedPlugins] = useState(listLayoutPlugins());
 
     // Layout validation constants & helpers
     const MIN_PLACEHOLDER_SIZE = 0.05; // relative (5% of canvas)
@@ -55,6 +56,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
 
     useEffect(() => {
         setLocalSettings(settings);
+        if (isOpen) {
+            setCachedPlugins(listLayoutPlugins());
+        }
     }, [settings, isOpen]);
 
     if (!isOpen) return null;
@@ -384,7 +388,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
                                                                 >{t('aiSuggestLayout')}</button>
                                                         </h4>
                                                         <div className="space-y-2">
-                                                                {listLayoutPlugins().map(p => (
+                                                                {cachedPlugins.map(p => (
                                                                         <div key={p.id} className="flex items-center justify-between bg-gray-900 px-3 py-2 rounded">
                                                                                 <div className="flex flex-col">
                                                                                         <span className="text-xs text-white font-semibold">{p.label}</span>
@@ -392,7 +396,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose, settings
                                                                                 </div>
                                                                                 <div className="flex items-center gap-2">
                                                                                         <button
-                                                                                            onClick={() => setLayoutPluginEnabled(p.id, !p.enabled)}
+                                                                                            onClick={() => {
+                                                                                                setLayoutPluginEnabled(p.id, !p.enabled);
+                                                                                                setCachedPlugins(listLayoutPlugins());
+                                                                                            }}
                                                                                             className={`px-2 py-1 text-[10px] rounded ${p.enabled ? 'bg-green-600 hover:bg-green-500' : 'bg-gray-700 hover:bg-gray-600'} text-white`}
                                                                                         >{p.enabled ? t('disablePlugin') : t('enablePlugin')}</button>
                                                                                         <button
