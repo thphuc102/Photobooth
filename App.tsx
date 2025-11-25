@@ -281,6 +281,55 @@ const App: React.FC = () => {
     const handleActivity = () => { lastActivityRef.current = Date.now(); if (isKioskLocked) return; };
 
     const [isInitializing, setIsInitializing] = useState(true);
+    const persistSettingsRef = useRef<number | null>(null);
+    const persistSessionRef = useRef<number | null>(null);
+
+    // Keyboard shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Only enable shortcuts in finalize step and when not locked
+            if (appStep !== AppStep.FINALIZE_AND_EXPORT || isKioskLocked) return;
+            
+            // Prevent shortcuts when typing in inputs
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+            if (e.ctrlKey || e.metaKey) {
+                switch (e.key.toLowerCase()) {
+                    case 'z':
+                        e.preventDefault();
+                        if (historyIndex.current > 0) undo();
+                        break;
+                    case 'y':
+                        e.preventDefault();
+                        if (historyIndex.current < history.current.length - 1) redo();
+                        break;
+                    case 's':
+                        e.preventDefault();
+                        handleDownload();
+                        addToast('Downloading...', 'info');
+                        break;
+                }
+            } else {
+                switch (e.key) {
+                    case 'Escape':
+                        if (isSettingsOpen) setIsSettingsOpen(false);
+                        else if (isUiPanelOpen) setIsUiPanelOpen(false);
+                        else if (showPrinterPanel) setShowPrinterPanel(false);
+                        break;
+                    case 'Delete':
+                    case 'Backspace':
+                        if (selectedLayerIndex >= 0) {
+                            e.preventDefault();
+                            handleDeleteLayer();
+                        }
+                        break;
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [appStep, isKioskLocked, isSettingsOpen, isUiPanelOpen, showPrinterPanel, selectedLayerIndex]);
 
     // Guest Communication Listener
     useEffect(() => {
@@ -479,7 +528,6 @@ const App: React.FC = () => {
     }, [settings.placeholders, guestLayoutId, guestWindow, settings.frameSrc, settings.aspectRatio, settings.pro, sendMessage, settings.layoutOptions]);
 
     // Persist settings and session (debounced)
-    const persistSettingsRef = useRef<number | null>(null);
     useEffect(() => {
         if (persistSettingsRef.current) clearTimeout(persistSettingsRef.current);
         setIsSaving(true);
@@ -487,7 +535,6 @@ const App: React.FC = () => {
             persistSettings(settings).then(() => setIsSaving(false)).catch(() => setIsSaving(false)); 
         }, 800);
     }, [settings]);
-    const persistSessionRef = useRef<number | null>(null);
     useEffect(() => {
         if (persistSessionRef.current) clearTimeout(persistSessionRef.current);
         setIsSaving(true);
@@ -895,43 +942,53 @@ const App: React.FC = () => {
     }, [settings.fileNameTemplate, exportFormat]);
 
     const handleDownload = useCallback(async () => {
-        const image = await getImageForExport();
-        if (!image) {
-            addToast("Could not generate final image for download.", 'error');
-            return;
-        }
-        const filename = generateFilename();
-        if (settings.outputDirectoryHandle) {
-            try {
-                const res = await fetch(image);
-                const blob = await res.blob();
-                // @ts-ignore
-                const fileHandle = await settings.outputDirectoryHandle.getFileHandle(filename, { create: true });
-                // @ts-ignore
-                const writable = await fileHandle.createWritable();
-                await writable.write(blob);
-                await writable.close();
-                addToast(`Saved ${filename}`, 'success');
-            } catch (error) {
-                console.error("Error saving to directory handle:", error);
-                addToast("Failed to save to folder. Downloading via browser...", 'warning');
+        try {
+            setIsProcessing(true);
+            const image = await getImageForExport();
+            if (!image) {
+                addToast("Could not generate final image for download.", 'error');
+                return;
+            }
+            const filename = generateFilename();
+            if (settings.outputDirectoryHandle) {
+                try {
+                    const res = await fetch(image);
+                    const blob = await res.blob();
+                    // @ts-ignore
+                    const fileHandle = await settings.outputDirectoryHandle.getFileHandle(filename, { create: true });
+                    // @ts-ignore
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                    addToast(`✅ Saved: ${filename}`, 'success');
+                } catch (error) {
+                    console.error("Error saving to directory handle:", error);
+                    addToast("Failed to save to folder. Downloading via browser...", 'warning');
+                    const link = document.createElement('a');
+                    link.href = image;
+                    link.download = filename;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    addToast(`✅ Downloaded: ${filename}`, 'success');
+                }
+            } else {
                 const link = document.createElement('a');
                 link.href = image;
                 link.download = filename;
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
+                addToast(`✅ Downloaded: ${filename}`, 'success');
             }
-        } else {
-            const link = document.createElement('a');
-            link.href = image;
-            link.download = filename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+        } catch (error) {
+            console.error('Download failed:', error);
+            addToast('❌ Download failed: ' + (error as Error).message, 'error');
+        } finally {
+            setIsProcessing(false);
         }
         fileCounter.current += 1;
-    }, [getImageForExport, generateFilename, settings.outputDirectoryHandle]);
+    }, [getImageForExport, generateFilename, settings.outputDirectoryHandle, addToast]);
 
     // Handle Print Logic (Pooling + Vending)
     const handlePrint = useCallback(() => {
@@ -1036,12 +1093,13 @@ const App: React.FC = () => {
         });
     };
 
-    const undo = () => {
+    const undo = useCallback(() => {
         if (historyIndex.current > 0) {
             invalidateAiImage();
             historyIndex.current--;
             const prevSession = history.current[historyIndex.current];
             setSession(prevSession);
+            addToast('Undo', 'info');
             sendMessage({
                 mode: GuestScreenMode.REVIEW,
                 photos: prevSession.photos,
@@ -1053,14 +1111,15 @@ const App: React.FC = () => {
                 filter: prevSession.filter
             });
         }
-    };
+    }, [settings.frameSrc, settings.aspectRatio, sendMessage, addToast]);
 
-    const redo = () => {
+    const redo = useCallback(() => {
         if (historyIndex.current < history.current.length - 1) {
             invalidateAiImage();
             historyIndex.current++;
             const nextSession = history.current[historyIndex.current];
             setSession(nextSession);
+            addToast('Redo', 'info');
             sendMessage({
                 mode: GuestScreenMode.REVIEW,
                 photos: nextSession.photos,
@@ -1072,7 +1131,7 @@ const App: React.FC = () => {
                 filter: nextSession.filter
             });
         }
-    };
+    }, [settings.frameSrc, settings.aspectRatio, sendMessage, addToast]);
 
     const handleSelectLayer = (type: 'photo' | 'sticker' | 'text', index: number) => {
         setSelectedLayerType(type);
@@ -1307,19 +1366,70 @@ const App: React.FC = () => {
                         <p className="opacity-70">{uiConfig.description}</p>
                     </div>
                     <div className="flex items-center gap-4">
+                        {/* Undo/Redo buttons */}
+                        <div className="flex gap-2 mr-2">
+                            <button
+                                onClick={undo}
+                                disabled={historyIndex.current === 0}
+                                className={`p-2 rounded-lg transition-colors ${
+                                    historyIndex.current === 0
+                                        ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                                        : 'bg-[var(--color-panel)] hover:bg-black/20 text-white'
+                                }`}
+                                title="Undo (Ctrl+Z)"
+                            >
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                                </svg>
+                            </button>
+                            <button
+                                onClick={redo}
+                                disabled={historyIndex.current >= history.current.length - 1}
+                                className={`p-2 rounded-lg transition-colors ${
+                                    historyIndex.current >= history.current.length - 1
+                                        ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                                        : 'bg-[var(--color-panel)] hover:bg-black/20 text-white'
+                                }`}
+                                title="Redo (Ctrl+Y)"
+                            >
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
+                                </svg>
+                            </button>
+                        </div>
                         <button onClick={() => setIsUiPanelOpen(true)} className="p-2 bg-[var(--color-panel)] rounded-lg hover:bg-black/20" title="Customize UI">
                             <PaletteIcon className="w-6 h-6" />
                         </button>
                         <button
                             onClick={() => { if (!isKioskLocked) setIsSettingsOpen(true); }}
                             disabled={isKioskLocked}
-                            className={`p-2 rounded-lg hover:bg-black/20 ${isKioskLocked ? 'bg-gray-700 cursor-not-allowed' : 'bg-[var(--color-panel)]'}`}
-                            title={isKioskLocked ? 'Locked (Kiosk Mode)' : 'Settings'}
+                            className={`p-2 rounded-lg transition-all ${
+                                isKioskLocked 
+                                    ? 'bg-gray-700 cursor-not-allowed opacity-50' 
+                                    : 'bg-[var(--color-panel)] hover:bg-black/20 hover:scale-105'
+                            }`}
+                            title={isKioskLocked ? '🔒 Locked (Kiosk Mode)' : 'Settings'}
                         ><SettingsIcon /></button>
                         {guestWindow ? (
-                            <button onClick={closeGuestWindow} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">{t('closeGuestWindow')}</button>
+                            <button 
+                                onClick={closeGuestWindow} 
+                                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-all hover:scale-105 shadow-lg"
+                            >
+                                <span className="flex items-center gap-2">
+                                    <span>🖥️</span>
+                                    {t('closeGuestWindow')}
+                                </span>
+                            </button>
                         ) : (
-                            <button onClick={openGuestWindow} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">{t('openGuestWindow')}</button>
+                            <button 
+                                onClick={openGuestWindow} 
+                                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all hover:scale-105 shadow-lg"
+                            >
+                                <span className="flex items-center gap-2">
+                                    <span>🖥️</span>
+                                    {t('openGuestWindow')}
+                                </span>
+                            </button>
                         )}
                     </div>
                 </header>
@@ -1553,9 +1663,15 @@ const App: React.FC = () => {
                     )}
                     <PerformanceHud fps={perfFps} frameMs={perfFrameMs} broadcastIntervalMs={BROADCAST_INTERVAL_MS} />
                     {isSaving && (
-                        <div className="fixed bottom-4 left-4 z-[90] bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 flex items-center gap-2 shadow-lg">
+                        <div className="fixed bottom-4 left-4 z-[90] bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 flex items-center gap-2 shadow-lg animate-pulse">
                             <LoadingSpinner size="sm" />
-                            <span className="text-xs text-gray-300">Auto-saving...</span>
+                            <span className="text-xs text-gray-300">💾 Auto-saving...</span>
+                        </div>
+                    )}
+                    {isProcessing && (
+                        <div className="fixed bottom-4 left-4 z-[90] bg-blue-800 border border-blue-700 rounded-lg px-4 py-2 flex items-center gap-2 shadow-lg animate-pulse">
+                            <LoadingSpinner size="sm" />
+                            <span className="text-xs text-white">⚙️ Processing...</span>
                         </div>
                     )}
                     <ToastContainer toasts={toasts} onRemove={removeToast} />
