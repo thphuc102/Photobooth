@@ -245,7 +245,9 @@ const ReviewMode: React.FC<ReviewModeProps> = ({ photos, stickers = [], textLaye
     const [currentPath, setCurrentPath] = useState<{ x: number, y: number }[]>([]);
 
     // UI toggle state
-    const [activeTool, setActiveTool] = useState<'none' | 'drawing' | 'filter'>('none');
+    const [activeTool, setActiveTool] = useState<'none' | 'drawing' | 'filter' | 'sticker' | 'text'>('none');
+    const [selectedSticker, setSelectedSticker] = useState<string | null>(null);
+    const [textInput, setTextInput] = useState('');
 
     const dataRef = useRef({ photos, stickers, textLayers, drawings, filter, frameImage, loadedImages, aspectRatio });
 
@@ -513,20 +515,34 @@ const ReviewMode: React.FC<ReviewModeProps> = ({ photos, stickers = [], textLaye
             </div>
 
             {/* Toolbar */}
-            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-6 bg-gray-900/90 p-4 rounded-2xl backdrop-blur-md border border-gray-700">
+            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-6 bg-gray-900/90 p-4 rounded-2xl backdrop-blur-md border border-gray-700 shadow-2xl">
                 <button
                     onClick={() => setActiveTool(activeTool === 'drawing' ? 'none' : 'drawing')}
-                    className={`p-4 rounded-xl flex flex-col items-center gap-2 ${activeTool === 'drawing' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+                    className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all duration-200 ${activeTool === 'drawing' ? 'bg-indigo-600 text-white scale-110' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
                 >
                     <PenIcon className="w-8 h-8" />
-                    <span className="text-xs font-bold uppercase">Sign</span>
+                    <span className="text-xs font-bold uppercase">Draw</span>
                 </button>
                 <button
                     onClick={() => setActiveTool(activeTool === 'filter' ? 'none' : 'filter')}
-                    className={`p-4 rounded-xl flex flex-col items-center gap-2 ${activeTool === 'filter' ? 'bg-pink-600 text-white' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+                    className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all duration-200 ${activeTool === 'filter' ? 'bg-pink-600 text-white scale-110' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
                 >
                     <FilterIcon className="w-8 h-8" />
                     <span className="text-xs font-bold uppercase">Filter</span>
+                </button>
+                <button
+                    onClick={() => setActiveTool(activeTool === 'sticker' ? 'none' : 'sticker')}
+                    className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all duration-200 ${activeTool === 'sticker' ? 'bg-yellow-600 text-white scale-110' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+                >
+                    <span className="text-3xl">😊</span>
+                    <span className="text-xs font-bold uppercase">Emoji</span>
+                </button>
+                <button
+                    onClick={() => setActiveTool(activeTool === 'text' ? 'none' : 'text')}
+                    className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all duration-200 ${activeTool === 'text' ? 'bg-green-600 text-white scale-110' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+                >
+                    <span className="text-2xl font-bold">Aa</span>
+                    <span className="text-xs font-bold uppercase">Text</span>
                 </button>
             </div>
 
@@ -553,6 +569,99 @@ const ReviewMode: React.FC<ReviewModeProps> = ({ photos, stickers = [], textLaye
                     ))}
                 </div>
             )}
+
+            {/* Sticker Selection Panel */}
+            {activeTool === 'sticker' && (
+                <div className="absolute bottom-36 left-1/2 -translate-x-1/2 bg-gray-900/95 p-6 rounded-xl border border-gray-700 flex flex-wrap gap-3 max-w-[90vw] animate-slide-up">
+                    {['😀', '😂', '😍', '🥳', '😎', '🤩', '😘', '💖', '💯', '🔥', '⭐', '✨', '👍', '👏', '🎉', '🎊', '🎈', '🌟'].map(emoji => (
+                        <button
+                            key={emoji}
+                            onClick={() => {
+                                // Add sticker at center
+                                const action: GuestAction = {
+                                    type: 'GUEST_ADD_STICKER',
+                                    sticker: { src: emoji, x: 0.5, y: 0.5, scale: 1 }
+                                };
+                                window.parent.postMessage({ type: 'GUEST_ACTION', payload: action }, '*');
+                                setActiveTool('none');
+                            }}
+                            className="text-5xl p-3 rounded-lg hover:bg-white/20 transition-all hover:scale-110 active:scale-95"
+                        >
+                            {emoji}
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {/* Text Input Panel */}
+            {activeTool === 'text' && (
+                <div className="absolute bottom-36 left-1/2 -translate-x-1/2 bg-gray-900/95 p-6 rounded-xl border border-gray-700 flex flex-col gap-4 min-w-[400px] animate-slide-up">
+                    <input
+                        type="text"
+                        value={textInput}
+                        onChange={(e) => setTextInput(e.target.value)}
+                        placeholder="Enter your message..."
+                        className="bg-gray-800 border border-gray-600 rounded-lg px-4 py-3 text-white text-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                        autoFocus
+                    />
+                    <div className="flex gap-2">
+                        <button
+                            onClick={() => {
+                                if (textInput.trim()) {
+                                    const action: GuestAction = {
+                                        type: 'GUEST_ADD_TEXT',
+                                        text: { content: textInput, x: 0.5, y: 0.5, fontSize: 48, color: '#ffffff' }
+                                    };
+                                    window.parent.postMessage({ type: 'GUEST_ACTION', payload: action }, '*');
+                                    setTextInput('');
+                                    setActiveTool('none');
+                                }
+                            }}
+                            className="flex-1 bg-green-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-green-700 transition-all hover:scale-105 active:scale-95"
+                        >
+                            Add Text
+                        </button>
+                        <button
+                            onClick={() => setActiveTool('none')}
+                            className="px-6 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-all"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Top Action Bar */}
+            <div className="absolute top-8 right-8 flex gap-3">
+                <button
+                    onClick={() => {
+                        const action: GuestAction = { type: 'GUEST_UNDO' };
+                        window.parent.postMessage({ type: 'GUEST_ACTION', payload: action }, '*');
+                    }}
+                    className="bg-gray-800/90 backdrop-blur-md text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-gray-700 transition-all hover:scale-105 active:scale-95 border border-gray-600"
+                    title="Undo Last Action"
+                >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                    </svg>
+                    <span className="font-bold">Undo</span>
+                </button>
+                <button
+                    onClick={() => {
+                        if (window.confirm('Start over with new photos?')) {
+                            const action: GuestAction = { type: 'GUEST_RETAKE' };
+                            window.parent.postMessage({ type: 'GUEST_ACTION', payload: action }, '*');
+                        }
+                    }}
+                    className="bg-orange-600/90 backdrop-blur-md text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-orange-700 transition-all hover:scale-105 active:scale-95 border border-orange-500"
+                    title="Retake Photos"
+                >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    <span className="font-bold">Retake</span>
+                </button>
+            </div>
         </div>
     );
 };

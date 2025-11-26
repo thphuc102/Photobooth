@@ -217,12 +217,17 @@ export interface GuestScreenState {
 export type GuestAction =
   | { type: 'GUEST_START' }
   | { type: 'GUEST_SELECT_LAYOUT', layout: string }
-  | { type: 'GUEST_SELECT_FRAME', frameSrc: string } // New
+  | { type: 'GUEST_SELECT_FRAME', frameSrc: string }
   | { type: 'GUEST_EMAIL', email: string }
   | { type: 'GUEST_PRINT' }
   | { type: 'GUEST_ADD_DRAWING', drawing: DrawingPath }
   | { type: 'GUEST_SET_FILTER', filter: string }
-  | { type: 'GUEST_PAYMENT_COMPLETE' };
+  | { type: 'GUEST_PAYMENT_COMPLETE' }
+  | { type: 'GUEST_ADD_STICKER', sticker: { src: string, x: number, y: number, scale: number } }
+  | { type: 'GUEST_ADD_TEXT', text: { content: string, x: number, y: number, fontSize: number, color: string } }
+  | { type: 'GUEST_RETAKE' }
+  | { type: 'GUEST_UNDO' }
+  | { type: 'GUEST_SHARE_SOCIAL', platform: 'facebook' | 'twitter' | 'instagram' };
 
 export type InterWindowMessage = {
   type: 'SET_STATE';

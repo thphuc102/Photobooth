@@ -358,7 +358,7 @@ const App: React.FC = () => {
             if (msg.type === 'GUEST_ACTION') {
                 const p = msg.payload;
                 if (!p || typeof p !== 'object' || typeof p.type !== 'string') return false;
-                const allowed = ['GUEST_START','GUEST_SELECT_LAYOUT','GUEST_SELECT_FRAME','GUEST_EMAIL','GUEST_PRINT','GUEST_ADD_DRAWING','GUEST_SET_FILTER','GUEST_PAYMENT_COMPLETE'];
+                const allowed = ['GUEST_START','GUEST_SELECT_LAYOUT','GUEST_SELECT_FRAME','GUEST_EMAIL','GUEST_PRINT','GUEST_ADD_DRAWING','GUEST_SET_FILTER','GUEST_PAYMENT_COMPLETE','GUEST_ADD_STICKER','GUEST_ADD_TEXT','GUEST_RETAKE','GUEST_UNDO','GUEST_SHARE_SOCIAL'];
                 if (!allowed.includes(p.type)) return false;
                 if (p.type === 'GUEST_EMAIL' && (typeof p.email !== 'string' || p.email.length > 200)) return false;
                 if (p.type === 'GUEST_SELECT_LAYOUT' && typeof p.layout !== 'string') return false;
@@ -496,6 +496,60 @@ const App: React.FC = () => {
                 setSession(prev => ({ ...prev, isPaid: true }));
                 setAnalytics(prev => ({ ...prev, totalRevenue: prev.totalRevenue + settings.pro.pricePerPrint }));
                 handlePrintInternal(); // Proceed to print after payment
+                break;
+            case 'GUEST_ADD_STICKER':
+                // Add emoji/sticker to session
+                if (action.sticker) {
+                    const stickerSize = 0.15; // 15% of canvas
+                    const newSticker: StickerLayer = {
+                        id: Date.now().toString(),
+                        src: action.sticker.src,
+                        x: action.sticker.x,
+                        y: action.sticker.y,
+                        width: stickerSize,
+                        height: stickerSize,
+                        rotation: 0
+                    };
+                    const updatedSession = { ...session, stickers: [...session.stickers, newSticker] };
+                    setSession(prev => ({ ...prev, stickers: [...prev.stickers, newSticker] }));
+                    updateSessionWithHistory(updatedSession);
+                    addToast('Sticker added! 🎨', 'success');
+                }
+                break;
+            case 'GUEST_ADD_TEXT':
+                // Add text layer to session
+                if (action.text) {
+                    const newText: TextLayer = {
+                        id: Date.now().toString(),
+                        text: action.text.content,
+                        x: action.text.x,
+                        y: action.text.y,
+                        fontSize: action.text.fontSize / 1000, // Normalize to relative size
+                        color: action.text.color,
+                        fontFamily: 'Arial',
+                        fontWeight: 'bold',
+                        rotation: 0
+                    };
+                    const updatedSession = { ...session, textLayers: [...session.textLayers, newText] };
+                    setSession(prev => ({ ...prev, textLayers: [...prev.textLayers, newText] }));
+                    updateSessionWithHistory(updatedSession);
+                    addToast('Text added! ✍️', 'success');
+                }
+                break;
+            case 'GUEST_RETAKE':
+                // Reset photos and let guest retake
+                setSession(prev => ({ ...prev, photos: [], stickers: [], textLayers: [], drawings: [], filter: '' }));
+                setAppStep(AppStep.PHOTO_UPLOAD);
+                addToast('Ready for new photos! 📸', 'info');
+                break;
+            case 'GUEST_UNDO':
+                // Trigger undo from guest
+                undo();
+                break;
+            case 'GUEST_SHARE_SOCIAL':
+                // Handle social sharing
+                addToast(`Sharing to ${action.platform}... 🚀`, 'info');
+                // Implement actual social sharing logic here
                 break;
         }
     };

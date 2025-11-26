@@ -173,8 +173,8 @@ const LayoutSelectionModal: React.FC<{
 
   useEffect(() => {
     if (isOpen) {
-      // Default to selecting all active layouts
-      setSelectedIds(availableLayouts.filter(l => l.isActive).map(l => l.id));
+      // Start with empty selection - user must explicitly choose
+      setSelectedIds([]);
     }
   }, [isOpen, availableLayouts]);
 
@@ -186,29 +186,82 @@ const LayoutSelectionModal: React.FC<{
 
   if (!isOpen) return null;
 
+  const selectAll = () => {
+    setSelectedIds(availableLayouts.filter(l => l.isActive).map(l => l.id));
+  };
+
+  const deselectAll = () => {
+    setSelectedIds([]);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" aria-modal="true">
       <div className="relative transform overflow-hidden rounded-lg bg-[var(--color-panel)] border border-[var(--color-border)] text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg p-6 space-y-4">
         <h3 className="text-lg font-medium leading-6 text-[var(--color-text-primary)]">Select Supported Layouts</h3>
-        <p className="text-sm text-[var(--color-text-primary)] opacity-70">Choose which layouts this frame supports.</p>
+        <p className="text-sm text-[var(--color-text-primary)] opacity-70">Choose which layouts this frame supports. ({selectedIds.length} selected)</p>
+
+        <div className="flex gap-2 mb-2">
+          <button
+            type="button"
+            onClick={selectAll}
+            className="px-3 py-1 text-xs rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/30 transition-colors"
+          >
+            Select All
+          </button>
+          <button
+            type="button"
+            onClick={deselectAll}
+            className="px-3 py-1 text-xs rounded bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors"
+          >
+            Clear All
+          </button>
+        </div>
 
         <div className="max-h-60 overflow-y-auto space-y-2">
           {availableLayouts.map(layout => (
-            <div key={layout.id} className="flex items-center gap-3 p-2 rounded hover:bg-white/5 cursor-pointer" onClick={() => toggleLayout(layout.id)}>
+            <div 
+              key={layout.id} 
+              className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all border-2 ${
+                selectedIds.includes(layout.id) 
+                  ? 'bg-[var(--color-primary)]/20 border-[var(--color-primary)]' 
+                  : 'border-transparent hover:bg-white/5'
+              }`}
+              onClick={() => toggleLayout(layout.id)}
+            >
               <input
                 type="checkbox"
                 checked={selectedIds.includes(layout.id)}
                 onChange={() => toggleLayout(layout.id)}
-                className="h-4 w-4 rounded border-gray-300 bg-gray-700 text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
+                className="h-5 w-5 rounded border-gray-300 bg-gray-700 text-[var(--color-primary)] focus:ring-[var(--color-primary)] cursor-pointer"
               />
-              <span className="text-sm text-[var(--color-text-primary)]">{layout.label}</span>
+              <span className={`text-sm font-medium ${
+                selectedIds.includes(layout.id) 
+                  ? 'text-[var(--color-primary)]' 
+                  : 'text-[var(--color-text-primary)]'
+              }`}>
+                {layout.label}
+              </span>
+              {selectedIds.includes(layout.id) && (
+                <span className="ml-auto text-[var(--color-primary)] text-xs">✓</span>
+              )}
             </div>
           ))}
         </div>
 
         <div className="mt-5 sm:mt-6 flex justify-end gap-3">
-          <button type="button" onClick={onClose} className="inline-flex justify-center rounded-md border border-[var(--color-border)] px-4 py-2 text-sm font-medium text-[var(--color-text-primary)] opacity-80 hover:bg-black/20">Cancel</button>
-          <button type="button" onClick={() => onConfirm(selectedIds)} className="inline-flex justify-center rounded-md border border-transparent bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white filter hover:brightness-110">Confirm</button>
+          <button type="button" onClick={onClose} className="inline-flex justify-center rounded-md border border-[var(--color-border)] px-4 py-2 text-sm font-medium text-[var(--color-text-primary)] opacity-80 hover:bg-black/20 transition-all">Cancel</button>
+          <button 
+            type="button" 
+            onClick={() => onConfirm(selectedIds)} 
+            disabled={selectedIds.length === 0}
+            className={`inline-flex justify-center rounded-md border border-transparent px-4 py-2 text-sm font-medium text-white transition-all ${
+              selectedIds.length === 0
+                ? 'bg-gray-600 cursor-not-allowed opacity-50'
+                : 'bg-[var(--color-primary)] hover:brightness-110'
+            }`}
+          >
+            Confirm ({selectedIds.length})
+          </button>
         </div>
       </div>
     </div>
