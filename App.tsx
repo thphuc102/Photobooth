@@ -1360,7 +1360,7 @@ const App: React.FC = () => {
                 <UiCustomizationPanel isOpen={isUiPanelOpen} onClose={() => setIsUiPanelOpen(false)} config={uiConfig} onConfigChange={setUiConfig} />
                 <SettingsPanel isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} settings={settings} onSettingsChange={setSettings} analytics={analytics} currentGuestLayoutId={guestLayoutId} />
 
-                <header className="w-full max-w-7xl flex justify-between items-center mb-8">
+                <header className="w-full max-w-7xl flex justify-between items-center mb-8 animate-fade-in">
                     <div>
                         <h1 className="text-4xl font-bold text-[var(--color-primary)]">{uiConfig.title}</h1>
                         <p className="opacity-70">{uiConfig.description}</p>
@@ -1371,10 +1371,10 @@ const App: React.FC = () => {
                             <button
                                 onClick={undo}
                                 disabled={historyIndex.current === 0}
-                                className={`p-2 rounded-lg transition-colors ${
+                                className={`p-2 rounded-lg transition-all duration-200 ease-out ${
                                     historyIndex.current === 0
                                         ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                                        : 'bg-[var(--color-panel)] hover:bg-black/20 text-white'
+                                        : 'bg-[var(--color-panel)] hover:bg-black/20 hover:scale-110 text-white active:scale-95'
                                 }`}
                                 title="Undo (Ctrl+Z)"
                             >
@@ -1385,10 +1385,10 @@ const App: React.FC = () => {
                             <button
                                 onClick={redo}
                                 disabled={historyIndex.current >= history.current.length - 1}
-                                className={`p-2 rounded-lg transition-colors ${
+                                className={`p-2 rounded-lg transition-all duration-200 ease-out ${
                                     historyIndex.current >= history.current.length - 1
                                         ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                                        : 'bg-[var(--color-panel)] hover:bg-black/20 text-white'
+                                        : 'bg-[var(--color-panel)] hover:bg-black/20 hover:scale-110 text-white active:scale-95'
                                 }`}
                                 title="Redo (Ctrl+Y)"
                             >
@@ -1397,23 +1397,23 @@ const App: React.FC = () => {
                                 </svg>
                             </button>
                         </div>
-                        <button onClick={() => setIsUiPanelOpen(true)} className="p-2 bg-[var(--color-panel)] rounded-lg hover:bg-black/20" title="Customize UI">
+                        <button onClick={() => setIsUiPanelOpen(true)} className="p-2 bg-[var(--color-panel)] rounded-lg hover:bg-black/20 transition-all duration-200 hover:scale-110 active:scale-95" title="Customize UI (Themes & Branding)">
                             <PaletteIcon className="w-6 h-6" />
                         </button>
                         <button
                             onClick={() => { if (!isKioskLocked) setIsSettingsOpen(true); }}
                             disabled={isKioskLocked}
-                            className={`p-2 rounded-lg transition-all ${
+                            className={`p-2 rounded-lg transition-all duration-200 ${
                                 isKioskLocked 
                                     ? 'bg-gray-700 cursor-not-allowed opacity-50' 
-                                    : 'bg-[var(--color-panel)] hover:bg-black/20 hover:scale-105'
+                                    : 'bg-[var(--color-panel)] hover:bg-black/20 hover:scale-110 active:scale-95'
                             }`}
                             title={isKioskLocked ? '🔒 Locked (Kiosk Mode)' : 'Settings'}
                         ><SettingsIcon /></button>
                         {guestWindow ? (
                             <button 
                                 onClick={closeGuestWindow} 
-                                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-all hover:scale-105 shadow-lg"
+                                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg hover:shadow-xl"
                             >
                                 <span className="flex items-center gap-2">
                                     <span>🖥️</span>
@@ -1423,7 +1423,7 @@ const App: React.FC = () => {
                         ) : (
                             <button 
                                 onClick={openGuestWindow} 
-                                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all hover:scale-105 shadow-lg"
+                                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg hover:shadow-xl animate-pulse-slow"
                             >
                                 <span className="flex items-center gap-2">
                                     <span>🖥️</span>
@@ -1434,8 +1434,17 @@ const App: React.FC = () => {
                     </div>
                 </header>
 
-                <main className="w-full max-w-7xl flex-grow flex flex-col lg:flex-row gap-8">
-                    <div className="w-full lg:w-2/3 relative">
+                {/* Keyboard Shortcuts Help */}
+                <div className="w-full max-w-7xl mb-4 text-xs text-gray-500 flex items-center gap-4 opacity-50 hover:opacity-100 transition-opacity duration-300">
+                    <span>💡 Shortcuts:</span>
+                    <span>Ctrl+Z/Y (Undo/Redo)</span>
+                    <span>Ctrl+S (Save)</span>
+                    <span>Esc (Close)</span>
+                    <span>Del (Delete Layer)</span>
+                </div>
+
+                <main className="w-full max-w-7xl flex-grow flex flex-col lg:flex-row gap-8 transition-all duration-300 ease-out">
+                    <div className="w-full lg:w-2/3 relative transition-all duration-300">
                         <CanvasEditor
                             canvasRef={finalCanvasRef}
                             frameSrc={settings.frameSrc}
@@ -1472,8 +1481,8 @@ const App: React.FC = () => {
                             </div>
                         )}
                     </div>
-                    <div className="w-full lg:w-1/3">
-                        <div className="flex flex-col gap-4">
+                    <div className="w-full lg:w-1/3 transition-all duration-300">
+                        <div className="flex flex-col gap-4 overflow-y-auto max-h-[80vh] scroll-smooth">
                             <FinalizeControls
                                 onDownload={handleDownload}
                                 onPrint={handlePrint}
@@ -1529,7 +1538,7 @@ const App: React.FC = () => {
                                     <select
                                         value={session.filter}
                                         onChange={(e) => updateSessionWithHistory({ ...session, filter: e.target.value })}
-                                        className="w-full bg-[var(--color-background)] border border-[var(--color-border)] rounded px-3 py-2 text-sm"
+                                        className="w-full bg-[var(--color-background)] border border-[var(--color-border)] rounded px-3 py-2 text-sm transition-all duration-200 hover:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]"
                                     >
                                         {FILTER_PRESETS.map(f => (
                                             <option key={f.value} value={f.value}>{f.label}</option>
@@ -1541,7 +1550,7 @@ const App: React.FC = () => {
                                     <select
                                         value={exportFormat}
                                         onChange={(e) => setExportFormat(e.target.value)}
-                                        className="w-full bg-[var(--color-background)] border border-[var(--color-border)] rounded px-3 py-2 text-sm"
+                                        className="w-full bg-[var(--color-background)] border border-[var(--color-border)] rounded px-3 py-2 text-sm transition-all duration-200 hover:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]"
                                     >
                                         {EXPORT_FORMATS.map(f => (
                                             <option key={f.value} value={f.value}>{f.label}</option>
@@ -1622,12 +1631,13 @@ const App: React.FC = () => {
     return (
         <ErrorBoundary onReset={() => setSession(s => ({ ...s }))}>
             {isInitializing ? (
-                <div className="min-h-screen flex items-center justify-center bg-gray-900">
+                <div className="min-h-screen flex flex-col items-center justify-center bg-gray-900 gap-4 animate-fade-in">
                     <LoadingSpinner size="lg" />
+                    <p className="text-gray-400 text-sm animate-pulse">Loading photobooth...</p>
                 </div>
             ) : (
-                <div className={`min-h-screen antialiased relative bg-[var(--color-background)] text-[var(--color-text-primary)] ${uiConfig.highContrastMode ? 'high-contrast' : ''}`}>    
-                    <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: uiConfig.backgroundSrc ? `url(${uiConfig.backgroundSrc})` : 'none', opacity: 0.1 }}></div>
+                <div className={`min-h-screen antialiased relative bg-[var(--color-background)] text-[var(--color-text-primary)] transition-all duration-300 ${uiConfig.highContrastMode ? 'high-contrast' : ''}`}>    
+                    <div className="absolute inset-0 bg-cover bg-center transition-opacity duration-500" style={{ backgroundImage: uiConfig.backgroundSrc ? `url(${uiConfig.backgroundSrc})` : 'none', opacity: 0.1 }}></div>
                     <div className="relative z-10">
                         {appStep === AppStep.FINALIZE_AND_EXPORT ? renderFinalizeStep() : renderSetup()}
                     {(guestLayoutId || guestWindow) && (
@@ -1663,13 +1673,13 @@ const App: React.FC = () => {
                     )}
                     <PerformanceHud fps={perfFps} frameMs={perfFrameMs} broadcastIntervalMs={BROADCAST_INTERVAL_MS} />
                     {isSaving && (
-                        <div className="fixed bottom-4 left-4 z-[90] bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 flex items-center gap-2 shadow-lg animate-pulse">
+                        <div className="fixed bottom-4 left-4 z-[90] bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 flex items-center gap-2 shadow-lg animate-pulse animate-slide-up">
                             <LoadingSpinner size="sm" />
                             <span className="text-xs text-gray-300">💾 Auto-saving...</span>
                         </div>
                     )}
                     {isProcessing && (
-                        <div className="fixed bottom-4 left-4 z-[90] bg-blue-800 border border-blue-700 rounded-lg px-4 py-2 flex items-center gap-2 shadow-lg animate-pulse">
+                        <div className="fixed bottom-4 left-4 z-[90] bg-blue-800 border border-blue-700 rounded-lg px-4 py-2 flex items-center gap-2 shadow-lg animate-pulse animate-slide-up">
                             <LoadingSpinner size="sm" />
                             <span className="text-xs text-white">⚙️ Processing...</span>
                         </div>
